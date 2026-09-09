@@ -31,7 +31,7 @@ Copilot.
 Register existing worktree links in this project's ignored workbench-root `.linked-repos.json`:
 
 ```json
-{"version":1,"targets":{"Shrimp":{"path":"Soniferous-Shrimp","remote":"https://github.com/Bossax/Soniferous-Shrimp.git","branch":"workbench/susu-project-conductor","upstream":"origin/main"}}}
+{"version":1,"targets":{"Team":{"path":"Team","remote":"https://github.com/example/team.git","branch":"workbench/my-workbench","upstream":"origin/main"}}}
 ```
 
 Use the branch assigned to that workbench. Registration is machine-local; it carries neither
