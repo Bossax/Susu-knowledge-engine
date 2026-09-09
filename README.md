@@ -1,21 +1,32 @@
 # Oversoul package
 
-Current version: **0.1.0**.
+Current version: **0.2.0**.
 
 Node 24.11+ (24 LTS) and Git are required. No package installation is needed for the client.
 
 From the workbench root run
-`node workbench-adapters/oversoul/scripts/install.mjs codex claude`. This installs the same
-package at project scope: `.agents/skills/oversoul` for Codex and
-`.claude/skills/oversoul` for Claude Code. These ignored copies belong only to this workbench;
-there is no user-global installation. Existing project installations are preserved and reported
-rather than overwritten. Restart the client session if its skill list was already loaded.
-Use `$oversoul` in Codex or `/oversoul` in Claude Code while working in this project.
+`node workbench-adapters/oversoul/scripts/install.mjs codex claude copilot`. This installs the
+same package at project scope: `.claude/skills/oversoul` for Claude Code and
+`.agents/skills/oversoul` shared by Codex and Copilot. These ignored copies belong only to this
+workbench; there is no user-global installation. Use `$oversoul` in Codex or `/oversoul` in
+Claude Code while working in this project.
 
-For Copilot, copy `integrations/oversoul.prompt.md` to this workbench's `.github/prompts/` and
-keep this package at `workbench-adapters/oversoul`, or update the prompt's single skill path.
-Opening SKILL.md as explicit context is also supported. This package is prepared for Copilot;
-an interactive pilot is still required on a machine with Copilot.
+The installer is version-aware: an absent target is installed, an equal version is left
+unchanged, a newer source upgrades an older installation in place (removing any file the old
+installation had that the new one doesn't), and an installed version newer than the source is
+refused unless `--allow-downgrade` is passed. An installation whose `SKILL.md` version can't be
+parsed is never silently overwritten — move it aside first. Restart the client session after an
+install or upgrade if its skill list was already loaded.
+
+If the project has no `AGENTS.md` yet, pass `--scaffold-agents` to create a minimal one instead
+of failing; without the flag, installation refuses to proceed so a project's own instructions are
+never silently created behind its back.
+
+`copilot` installs to the same `.agents/skills/oversoul` path as `codex` and also writes
+`.github/prompts/oversoul.prompt.md` from `integrations/oversoul.prompt.md`, rewriting its single
+skill path to the installed location. Opening SKILL.md as explicit context is also supported.
+This package is prepared for Copilot; an interactive pilot is still required on a machine with
+Copilot.
 
 Register existing worktree links in this project's ignored workbench-root `.linked-repos.json`:
 
@@ -43,5 +54,6 @@ preflight exception. Reports do not imply an agent has already read the returned
 The run command accepts capability-declared option/value pairs after `--`; repository-root,
 configuration, executable and arbitrary shell overrides are not accepted.
 
-Tests: `node --test test/client.test.mjs`. Tests use temporary local Git repositories and
-inject only the fetch transport; they do not contact GitHub or mutate the real worktree.
+Tests: `node --test test/*.test.mjs`. Tests use temporary local Git repositories and directories
+and inject only the fetch transport; they do not contact GitHub, npm, or mutate the real
+workbench or worktree.

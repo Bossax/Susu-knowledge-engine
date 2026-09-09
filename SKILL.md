@@ -2,12 +2,12 @@
 name: oversoul
 description: Connect a workbench to a configured linked knowledge repository, discover its current protocol, and inspect or reconcile its operational status through the agent's available MCP connection. Use for shared-system status or preparing shared work, not ordinary session startup.
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Oversoul
 
-Version: 0.1.0
+Version: 0.2.0
 
 Use the bundled `scripts/linked-repo.mjs` with Node 24.11+ from the user's workbench root.
 The workbench's ignored `.linked-repos.json` selects existing links and expected identities.

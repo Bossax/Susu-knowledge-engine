@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,symlink,realpath,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -10,7 +10,10 @@ const inspect=(wb)=>inspectReal(wb,undefined,true,transports.get(wb));
 const operate=(wb,command,target,capability)=>operateReal(wb,command,target,capability,[],transports.get(wb));
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:'pipe'}).trim();
 async function fixture(){
-  const root=await mkdtemp(join(tmpdir(),'oversoul-test-'));const primary=join(root,'primary'),remote=join(root,'remote.git'),wb=join(root,'wb'),wt=join(root,'wt');
+  // realpath first: on macOS, mkdtemp(tmpdir()) yields /var/folders/... while a child process's
+  // own realpath'd process.cwd() reports /private/var/folders/...; without this the two never
+  // compare equal even though they are the same directory.
+  const root=await realpath(await mkdtemp(join(tmpdir(),'oversoul-test-')));const primary=join(root,'primary'),remote=join(root,'remote.git'),wb=join(root,'wb'),wt=join(root,'wt');
   await mkdir(primary);await mkdir(wb);git(root,'init','--bare',remote);git(primary,'init','-b','main');
   git(primary,'config','user.name','Test');git(primary,'config','user.email','test@example.invalid');git(primary,'config','commit.gpgsign','false');
   await writeFile(join(primary,'AGENTS.md'),'Test protocol');await writeFile(join(primary,'entry.mjs'),'console.log(process.cwd())');
@@ -56,4 +59,25 @@ test('broken link, missing protocol document and argument injection cannot execu
   await writeFile(join(f.wt,'protocol.json'),JSON.stringify(p));await assert.rejects(manifest(f.wt,'https://github.com/example/team'),/ENOENT/);
   await writeFile(join(f.wb,'.linked-repos.json'),JSON.stringify({version:1,targets:{Team:{path:'missing',remote:'https://github.com/example/team',branch:'workbench',upstream:'origin/main'}}}));
   await assert.rejects(inspect(f.wb),/ENOENT/);
+});
+test('a registry path nested under a subdirectory resolves like a top-level one',async()=>{
+  const f=await fixture();
+  await mkdir(join(f.wb,'links'),{recursive:true});
+  await symlink(f.wt,join(f.wb,'links','Team'),process.platform==='win32'?'junction':'dir');
+  await writeFile(join(f.wb,'.linked-repos.json'),JSON.stringify({version:1,targets:{Team:{path:'links/Team',remote:'https://github.com/example/team.git',branch:'workbench',upstream:'origin/main'}}}));
+  const result=await inspect(f.wb);
+  assert.equal(result.ready,true,JSON.stringify(result));
+});
+test('a case-differing registry path still resolves on a case-insensitive filesystem',async(t)=>{
+  const probe=await mkdtemp(join(tmpdir(),'oversoul-case-'));
+  await writeFile(join(probe,'A'),'x');
+  let caseInsensitive=true;
+  try{await stat(join(probe,'a'));}catch{caseInsensitive=false;}
+  if(!caseInsensitive){t.skip('Filesystem is case-sensitive; nothing to verify here.');return;}
+  const f=await fixture();
+  const registry=JSON.parse(await readFile(join(f.wb,'.linked-repos.json'),'utf8'));
+  registry.targets.Team.path='team';
+  await writeFile(join(f.wb,'.linked-repos.json'),JSON.stringify(registry));
+  const result=await inspect(f.wb);
+  assert.equal(result.ready,true,JSON.stringify(result));
 });
