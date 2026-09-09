@@ -7,10 +7,14 @@ import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const sharedRoot=resolve(packageRoot,'..','_shared');
 
 async function exists(p){try{await stat(p);return true;}catch{return false;}}
 
+// Mirror the real workbench-adapters/{oversoul,_shared} sibling layout under each temp root,
+// since install.mjs imports the shared installer via a relative '../../_shared/...' path.
 async function makeSource(root,version){
+  if(!await exists(join(root,'_shared'))) await cp(sharedRoot,join(root,'_shared'),{recursive:true});
   const src=join(root,'source-'+version);
   await cp(packageRoot,src,{recursive:true});
   let skill=await readFile(join(src,'SKILL.md'),'utf8');
