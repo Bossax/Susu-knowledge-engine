@@ -2,6 +2,8 @@
 
 Human requester: Bossa. Recorder: Codex.
 
+Accepted package version: `0.1.0`.
+
 ## Verified
 
 - Protocol manifest and normalization implemented in the dedicated Shrimp worktree, preserving

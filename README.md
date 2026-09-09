@@ -1,5 +1,7 @@
 # Oversoul package
 
+Current version: **0.1.0**.
+
 Node 24.11+ (24 LTS) and Git are required. No package installation is needed for the client.
 
 From the workbench root run
