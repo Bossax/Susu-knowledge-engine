@@ -5,6 +5,14 @@ import {pathToFileURL} from 'node:url';
 
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000}).trim();
 const inside=(root,path)=>{const rel=relative(root,path);return rel!== '..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
+// `git status --porcelain` also flags files whose only "change" is CRLF/LF normalization noise
+// (autocrlf), with zero real content at risk. Untracked files are always real; for tracked files,
+// fall back to a content-level diff against HEAD -- an empty diff means nothing is actually dirty.
+function isReallyDirty(root,statusPorcelain){
+  if(statusPorcelain.split('\n').some(line=>line.startsWith('??')))return true;
+  try{return !!git(root,'diff','--stat','HEAD');}
+  catch{return true;}
+}
 export const GATE_LEASE_FILE='.agents/oversoul-gate.json';
 export const GATE_LEASE_TTL_MS=2*60*60*1000; // 2 hours
 export async function openGate(workbench,state){
@@ -70,9 +78,9 @@ export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>gi
   if(branch!==cfg.branch)diagnostics.push('Branch differs from registration');
   let upstream='';try{upstream=git(root,'rev-parse','--abbrev-ref','@{upstream}');}catch{diagnostics.push('Missing upstream');}
   if(upstream!==cfg.upstream||!upstream.startsWith('origin/'))diagnostics.push('Upstream differs from registration');
-  const changes=git(root,'status','--porcelain');if(changes)diagnostics.push('Dirty worktree');
+  const changes=git(root,'status','--porcelain');if(changes&&isReallyDirty(root,changes))diagnostics.push('Dirty worktree');
   let ahead=null,behind=null;
-  if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead)diagnostics.push(behind?'Divergent branch':'Branch ahead of upstream');}
+  if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead&&behind)diagnostics.push('Divergent branch');}
   let protocol=null;try{protocol=await manifest(root,cfg.remote);}catch(e){diagnostics.push(e.message);}
   const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,ready:!diagnostics.length&&behind===0};
   if(state.ready) await openGate(workbench,state);

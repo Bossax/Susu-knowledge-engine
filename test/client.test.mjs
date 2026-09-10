@@ -41,10 +41,31 @@ test('preflight, safe fast-forward, run, dirty preservation, ahead and divergenc
   await writeFile(join(f.wt,'new.txt'),'local');const head=git(f.wt,'rev-parse','HEAD');
   assert.equal((await operate(f.wb,'prepare')).status,'blocked');assert.equal(await readFile(join(f.wt,'new.txt'),'utf8'),'local');assert.equal(git(f.wt,'rev-parse','HEAD'),head);
   assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),false);
-  git(f.wt,'add','.');git(f.wt,'commit','-m','local');assert.match((await inspect(f.wb)).diagnostics.join(),/ahead/);
+  git(f.wt,'add','.');git(f.wt,'commit','-m','local');
+  const aheadOnly=await inspect(f.wb);assert.equal(aheadOnly.ready,true,JSON.stringify(aheadOnly));assert.equal(aheadOnly.ahead,1);assert.equal(aheadOnly.behind,0);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   await writeFile(join(f.primary,'remote.txt'),'other');git(f.primary,'add','.');git(f.primary,'commit','-m','other');git(f.primary,'push',f.remote,'main');
   assert.match((await inspect(f.wb)).diagnostics.join(),/Divergent/);
   git(f.wt,'checkout','--detach');assert.match((await inspect(f.wb)).diagnostics.join(),/Detached/);
+});
+test('CRLF/LF renormalization noise from autocrlf is not treated as dirty',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'doc.txt'),'line1\r\nline2\r\n');
+  git(f.wt,'add','doc.txt');git(f.wt,'commit','-m','add doc with crlf');
+  git(f.wt,'config','core.autocrlf','true');
+  await writeFile(join(f.wt,'doc.txt'),'line1\nline2\n');
+  assert.match(git(f.wt,'status','--porcelain'),/doc\.txt/);
+  const result=await inspect(f.wb);
+  assert.equal(result.ready,true,JSON.stringify(result));
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
+});
+test('a real content edit to a tracked file is still treated as dirty',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'AGENTS.md'),'Genuinely different content');
+  const result=await inspect(f.wb);
+  assert.equal(result.ready,false,JSON.stringify(result));
+  assert.match(result.diagnostics.join(),/Dirty worktree/);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),false);
 });
 test('missing upstream, failed fetch, wrong identity and manifest escape are blocked',async()=>{
   const f=await fixture();git(f.wt,'branch','--unset-upstream');assert.match((await inspect(f.wb)).diagnostics.join(),/Missing upstream/);
