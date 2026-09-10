@@ -4,13 +4,27 @@ This workbench exposes a dedicated Git worktree of the shared knowledge-base rep
 the Git-ignored `{{DIR}}/` directory junction (or symlink on macOS), on branch `{{BRANCH}}`. It
 does not contain or maintain a second copy of that repository.
 
-When instructed to interact with `{{TARGET}}`, use the generic installed linked-repository client
-through the installed `oversoul` skill from the workbench root. Its machine-local registry is
-`{{REGISTRY}}`. The target's `protocol.json`, `AGENTS.md`, and linked documents supply its
-current protocol; this file does not duplicate that policy. Dirty or divergent state remains a
-human choice — the client never merges, rebases, resets, or force-pushes silently. Running
-`prepare` or clean `inspect` opens the session gate lease (`.agents/oversoul-gate.json`),
-allowing authorized file operations on the target during the active session.
+#### Access Guardrail: Direct Read/Write Blocked
+Direct access to `{{DIR}}/` with generic file tools (Read, Write, Edit, Patch) or shell commands
+is blocked. The workbench enforces this boundary to ensure agents do not act on stale or divergent
+revisions. All operations must proceed through the `oversoul` skill.
+
+#### Using the Oversoul Skill
+Use the generic installed linked-repository client through the installed `oversoul` skill from
+the workbench root. Its machine-local registry is `{{REGISTRY}}`.
+
+1. **Inspect**: `node <skill>/scripts/linked-repo.mjs inspect --target {{TARGET}}` (or `/oversoul inspect` / `/oversoul`)
+   Checks synchronization, remote status (ahead/behind), and local changes. If the target is clean
+   and synchronized, it opens the session gate lease (`.agents/oversoul-gate.json`), granting
+   access for the active session.
+2. **Prepare**: `node <skill>/scripts/linked-repo.mjs prepare --target {{TARGET}}` (or `/oversoul prepare`)
+   Safely fast-forwards the worktree if it is strictly behind upstream and opens the session gate lease.
+3. **Run**: `node <skill>/scripts/linked-repo.mjs run --target {{TARGET}} --capability <NAME> [-- <args>]`
+   Executes interactive capabilities advertised in the target's `protocol.json`.
+
+The target's `protocol.json`, `AGENTS.md`, and linked documents supply its current protocol; this file
+does not duplicate that policy. Dirty or divergent state remains a human choice; the client never merges,
+rebases, resets, or force-pushes silently.
 
 The shared knowledge base and its connected services are contacted on demand when an update must
 be sent or verified, not automatically at the start of every workbench session.

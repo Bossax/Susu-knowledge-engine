@@ -26,6 +26,11 @@ elsewhere; the intended link path exists and doesn't already resolve to the inte
 a registry entry with the same name already points somewhere different. A dirty primary clone is
 reported as a warning, not a refusal — `git worktree add` never touches it.
 
+Connecting a workbench sets up the access guardrails: direct file reads, writes, and commands
+against the linked repository directory are blocked across supported agent clients (Claude Code,
+Codex CLI, Antigravity, GitHub Copilot). The active session gate lease (`.agents/oversoul-gate.json`)
+must be opened via `oversoul inspect` or `oversoul prepare` before operations can proceed.
+
 `connect.mjs` locates the `oversoul` package next to itself: nested under `./oversoul` (the
 layout after vendoring into a shared repository) or, failing that, as the sibling
 `../oversoul` (the layout in this workbench's development tree). The same file works unmodified
