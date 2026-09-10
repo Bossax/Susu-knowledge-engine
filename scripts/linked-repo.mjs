@@ -1,10 +1,25 @@
-import {readFile, realpath} from 'node:fs/promises';
-import {resolve, relative, isAbsolute, sep} from 'node:path';
+import {readFile, writeFile, mkdir, rm, realpath} from 'node:fs/promises';
+import {resolve, relative, isAbsolute, sep, join} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000}).trim();
 const inside=(root,path)=>{const rel=relative(root,path);return rel!== '..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
+export const GATE_LEASE_FILE='.agents/oversoul-gate.json';
+export const GATE_LEASE_TTL_MS=2*60*60*1000; // 2 hours
+export async function openGate(workbench,state){
+  const dir=join(workbench,'.agents');await mkdir(dir,{recursive:true});
+  const lease={target:state.target,root:state.root,revision:state.revision,openedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+GATE_LEASE_TTL_MS).toISOString()};
+  await writeFile(join(workbench,GATE_LEASE_FILE),JSON.stringify(lease,null,2),'utf8');
+  return lease;
+}
+export async function closeGate(workbench,target){
+  try{
+    const file=join(workbench,GATE_LEASE_FILE);
+    const lease=JSON.parse(await readFile(file,'utf8'));
+    if(!target||lease.target===target) await rm(file,{force:true});
+  }catch{}
+}
 export function identity(remote){
   const m=/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(remote);
   if(!m) throw new Error('Expected an explicit GitHub SSH or HTTPS repository identity');
@@ -59,19 +74,32 @@ export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>gi
   let ahead=null,behind=null;
   if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead)diagnostics.push(behind?'Divergent branch':'Branch ahead of upstream');}
   let protocol=null;try{protocol=await manifest(root,cfg.remote);}catch(e){diagnostics.push(e.message);}
-  return {target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,ready:!diagnostics.length&&behind===0};
+  const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,ready:!diagnostics.length&&behind===0};
+  if(state.ready) await openGate(workbench,state);
+  else await closeGate(workbench,state.target);
+  return state;
 }
 export async function operate(workbench,command,target,capability,args=[],fetchRemote){
   if(!['inspect','prepare','run'].includes(command))throw new Error('Use inspect, prepare, or run');
   let state=await inspect(workbench,target,true,fetchRemote);
-  if(command==='inspect')return state;
+  if(command==='inspect'){
+    if(state.ready) await openGate(workbench,state);
+    else await closeGate(workbench,state.target);
+    return state;
+  }
   if(command==='prepare'&&!state.diagnostics.length&&state.behind>0){
     const check=await inspect(workbench,target,false);
     if(check.revision!==state.revision||check.diagnostics.length)throw new Error('Worktree changed during preparation');
     git(state.root,'merge','--ff-only','@{upstream}');state=await inspect(workbench,target,false);
   }
-  if(!state.ready)return {...state,status:'blocked'};
-  if(command==='prepare')return {...state,status:'prepared'};
+  if(!state.ready){
+    await closeGate(workbench,state.target);
+    return {...state,status:'blocked'};
+  }
+  if(command==='prepare'){
+    await openGate(workbench,state);
+    return {...state,status:'prepared'};
+  }
   const c=state.protocol.capabilities[capability];
   if(!c||c.context!=='interactive')throw new Error('Capability unavailable for interactive execution');
   const optionNames=args.filter((_,i)=>i%2===0);

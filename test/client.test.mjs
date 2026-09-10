@@ -4,11 +4,12 @@ import {mkdtemp,mkdir,writeFile,readFile,symlink,realpath,stat} from 'node:fs/pr
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {identity,inspect as inspectReal,operate as operateReal,manifest} from '../scripts/linked-repo.mjs';
+import {identity,inspect as inspectReal,operate as operateReal,manifest,GATE_LEASE_FILE} from '../scripts/linked-repo.mjs';
 const transports=new Map();
 const inspect=(wb)=>inspectReal(wb,undefined,true,transports.get(wb));
 const operate=(wb,command,target,capability)=>operateReal(wb,command,target,capability,[],transports.get(wb));
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:'pipe'}).trim();
+const exists=async(p)=>{try{await stat(p);return true;}catch{return false;}};
 async function fixture(){
   // realpath first: on macOS, mkdtemp(tmpdir()) yields /var/folders/... while a child process's
   // own realpath'd process.cwd() reports /private/var/folders/...; without this the two never
@@ -31,12 +32,15 @@ test('SSH and HTTPS identity canonicalization',()=>assert.equal(identity('git@gi
 test('preflight, safe fast-forward, run, dirty preservation, ahead and divergence',async()=>{
   const f=await fixture();
   const initial=await inspect(f.wb);assert.equal(initial.ready,true,JSON.stringify(initial));
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   const run=await operate(f.wb,'run','Team','inventory');assert.equal(run.status,'complete');assert.equal(run.stdout.trim(),f.wt);
   await assert.rejects(operate(f.wb,'run','Team','publish'),/unavailable/);
   await writeFile(join(f.primary,'new.txt'),'remote');git(f.primary,'add','.');git(f.primary,'commit','-m','remote');git(f.primary,'push',f.remote,'main');
   assert.equal((await inspect(f.wb)).behind,1);assert.equal((await operate(f.wb,'prepare')).status,'prepared');
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   await writeFile(join(f.wt,'new.txt'),'local');const head=git(f.wt,'rev-parse','HEAD');
   assert.equal((await operate(f.wb,'prepare')).status,'blocked');assert.equal(await readFile(join(f.wt,'new.txt'),'utf8'),'local');assert.equal(git(f.wt,'rev-parse','HEAD'),head);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),false);
   git(f.wt,'add','.');git(f.wt,'commit','-m','local');assert.match((await inspect(f.wb)).diagnostics.join(),/ahead/);
   await writeFile(join(f.primary,'remote.txt'),'other');git(f.primary,'add','.');git(f.primary,'commit','-m','other');git(f.primary,'push',f.remote,'main');
   assert.match((await inspect(f.wb)).diagnostics.join(),/Divergent/);

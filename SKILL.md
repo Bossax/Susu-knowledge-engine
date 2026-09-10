@@ -2,12 +2,12 @@
 name: oversoul
 description: Check synchronization/operational status of the linked shared knowledge repository, or create/update its shared artifacts (Work Thread, Task, proposal, decision) via its Notion MCP connection. Invoke only when explicitly asked to check shared-repo status, reconcile it, or create/edit a shared thread/task/proposal there — never for ordinary session startup, recap, or general workbench/local-repo work.
 metadata:
-  version: 0.2.2
+  version: 0.2.3
 ---
 
 # Oversoul
 
-Version: 0.2.2
+Version: 0.2.3
 
 Use the bundled `scripts/linked-repo.mjs` with Node 24.11+ from the user's workbench root.
 The workbench's ignored `.linked-repos.json` selects existing links and expected identities.
@@ -16,7 +16,9 @@ If registration is missing, explain the required registration; do not guess a re
 
 1. Run `node <skill>/scripts/linked-repo.mjs inspect --target NAME`. Show synchronization
    diagnostics. Run `prepare` for a clean, current or strictly-behind target when the request
-   calls for operating there. Never resolve dirty/divergent state silently.
+   calls for operating there. Never resolve dirty/divergent state silently. Running `prepare`
+   or clean `inspect` opens the session gate (`.agents/oversoul-gate.json`), allowing authorized
+   file operations on the target during the active session.
 2. Read the returned instruction paths explicitly, starting with AGENTS.md and common documents,
    then the documents for the requested capability. A subprocess working directory does not
    load instructions into the agent. The target protocol is authoritative; keep no policy copy here.

@@ -1,6 +1,6 @@
 # Oversoul package
 
-Current version: **0.2.2**.
+Current version: **0.2.3**.
 
 Node 24.11+ (24 LTS) and Git are required. No package installation is needed for the client.
 
