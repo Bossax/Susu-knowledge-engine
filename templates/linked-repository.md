@@ -8,7 +8,9 @@ When instructed to interact with `{{TARGET}}`, use the generic installed linked-
 through the installed `oversoul` skill from the workbench root. Its machine-local registry is
 `{{REGISTRY}}`. The target's `protocol.json`, `AGENTS.md`, and linked documents supply its
 current protocol; this file does not duplicate that policy. Dirty or divergent state remains a
-human choice — the client never merges, rebases, resets, or force-pushes silently.
+human choice — the client never merges, rebases, resets, or force-pushes silently. Running
+`prepare` or clean `inspect` opens the session gate lease (`.agents/oversoul-gate.json`),
+allowing authorized file operations on the target during the active session.
 
 The shared knowledge base and its connected services are contacted on demand when an update must
 be sent or verified, not automatically at the start of every workbench session.

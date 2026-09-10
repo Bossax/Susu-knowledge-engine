@@ -26,7 +26,7 @@ Human requester: Bossa. Recorder: Claude.
   unregistered workbench being reported as such rather than failing; `verify-sync` detecting no
   drift against itself and reporting added/removed/changed files against a mutated copy; and the
   forward-compat no-literals invariant (no file under this package contains a literal
-  `Soniferous-Shrimp` or `Bossax` reference).
+  shared-repo name or repository owner reference).
 - Fixed a bug found by the tests themselves: `install.mjs`'s own `--scaffold-agents` template
   originally contained a sentinel-marked stub, which collided with `connect.mjs`'s own sentinel
   injection when `AGENTS.md` was absent on first run, producing two blocks and a false
@@ -37,7 +37,7 @@ Human requester: Bossa. Recorder: Claude.
 - All 22 tests pass together: `node --test workbench-adapters/oversoul/test/*.test.mjs
   workbench-adapters/connector/test/*.test.mjs`.
 - Ran `connect.mjs status` and a no-`--yes` `link` against the real workbench (from inside the
-  real `Soniferous-Shrimp/` worktree, targeting the real `.linked-repos.json` entry). The
+  real shared-repo worktree, targeting the real `.linked-repos.json` entry). The
   load-bearing checks — worktree, branch, link, registry, `.gitignore` — all correctly reported
   `unchanged`, since this workbench was already hand-provisioned before this tool existed. The
   contract and MCP steps correctly reported genuine gaps (no sentinel-marked `AGENTS.md` block;
