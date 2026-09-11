@@ -1,12 +1,27 @@
-import {readFile, writeFile, mkdir, realpath, readdir, stat, symlink, rename, rm} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import {readFile, mkdir, realpath, readdir, symlink} from 'node:fs/promises';
 import {resolve, relative, isAbsolute, sep, join, dirname, basename} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {pathToFileURL, fileURLToPath} from 'node:url';
+import {buildArtifacts} from './manifest.mjs';
 
-// Always resolve sibling files (templates/, an adjacent oversoul/) against this module's own
-// location, never process.argv[1] — the latter is the caller's file when connect() is imported
-// as a module (as the tests do), not this file.
+// Always resolve sibling files (templates/, payload/, an adjacent oversoul/) against this
+// module's own location, never process.argv[1] -- the latter is the caller's file when connect()
+// is imported as a module (as the tests do), not this file.
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// _shared sits one level up from connector/ in the development tree (workbench-adapters/_shared)
+// but directly alongside connect.mjs once vendored -- vendoring flattens connector/'s own folder
+// away while oversoul/ and _shared/ keep theirs, so connect.mjs ends up one level shallower than
+// it started relative to _shared specifically. A static relative import can't pick between the
+// two, so this resolves at load time instead, the same way resolveOversoulPath already does for
+// the oversoul package.
+const SHARED_ROOT = existsSync(join(HERE, '_shared')) ? join(HERE, '_shared') : join(HERE, '..', '_shared');
+const sharedImport = (p) => import(pathToFileURL(join(SHARED_ROOT, p)).href);
+const {pathExists, writeJsonAtomic} = await sharedImport('fs.mjs');
+const {parseVersion} = await sharedImport('skill-version.mjs');
+const {probeArtifact, applyArtifact, isBlocking, needsWrite} = await sharedImport('artifacts/index.mjs');
+const {readState, writeState, baseFor} = await sharedImport('artifact-state.mjs');
 
 // Human-invoked bootstrap tool. Deliberately not a protocol.json capability: it writes outside
 // the knowledge-base repository (into an arbitrary workbench directory), so no agent-invoked
@@ -15,7 +30,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000}).trim();
 const inside = (root, path) => { const rel = relative(root, path); return rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel); };
 const sanitize = (s) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'workbench';
-const pathExists = async (p) => { try { await stat(p); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
 
 // Resolve GitHub owner/repo identity the same way the client does, without depending on it
 // (the vendored oversoul copy's exact nesting differs between the workbench and a shared repo).
@@ -32,7 +46,7 @@ async function resolvePrimaryRoot(repoCwd) {
 
 // The same connect.mjs file works unmodified from the workbench development tree (oversoul is a
 // sibling of this directory) and from a vendored release inside a shared repository (oversoul is
-// nested under this directory) — whichever layout exists next to this file wins.
+// nested under this directory) -- whichever layout exists next to this file wins.
 async function resolveOversoulPath(override) {
   if (override) return override;
   const nested = join(HERE, 'oversoul');
@@ -42,36 +56,174 @@ async function resolveOversoulPath(override) {
   throw new Error('Could not locate the oversoul package next to connect.mjs (looked in ./oversoul and ../oversoul)');
 }
 
-function parseVersion(skillMdText) {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skillMdText)?.[1];
-  return /^\s{2}version:\s*(\d+\.\d+\.\d+)\s*$/m.exec(frontmatter ?? '')?.[1];
+const DEFAULT_CONNECT_CLIENTS = ['claude', 'codex', 'copilot'];
+// status/apply default to the full candidate set: the whole point of this mechanism is to
+// surface drift, including a client that was wired up some other way than `link` (e.g. a
+// hand-added Antigravity MCP entry) and now has nobody checking it.
+const DEFAULT_REPORT_CLIENTS = ['claude', 'codex', 'copilot', 'antigravity'];
+
+function applicableClients(entry, clients) {
+  if (!entry.clients) return true;
+  return entry.clients.some(c => clients.includes(c));
 }
 
-async function collectTree(root) {
-  const out = new Set();
-  async function walk(dir) {
-    for (const entry of await readdir(dir, {withFileTypes: true})) {
-      const full = join(dir, entry.name);
-      out.add(relative(root, full).split(sep).join('/'));
-      if (entry.isDirectory()) await walk(full);
+// Builds the per-workbench context every artifact handler reads: where things are, which
+// template text to render, and a bound lookup into whatever state was last recorded.
+async function buildCtx({workbenchRoot, oversoulPath, target, clients, allowDowngrade}) {
+  const connectorRoot = HERE;
+  const templatesDir = join(connectorRoot, 'templates');
+  const payloadDir = join(connectorRoot, 'payload');
+  const skillMdText = await readFile(join(oversoulPath, 'SKILL.md'), 'utf8');
+  const skillVersion = parseVersion(skillMdText);
+  const contractTemplateText = await readFile(join(templatesDir, 'linked-repository.md'), 'utf8');
+  const promptTemplatePath = join(oversoulPath, 'integrations', 'oversoul.prompt.md');
+
+  const artifacts = buildArtifacts({oversoulPath, payloadDir, contractTemplateText, promptTemplatePath});
+  const vars = {TARGET: target?.name ?? '', DIR: target?.dir ?? '', BRANCH: target?.branch ?? '', REGISTRY: '.linked-repos.json'};
+  for (const entry of artifacts) {
+    if (entry.kind === 'lines') entry.lines = entry.lines.map(l => l.replaceAll('{{DIR}}', vars.DIR).replaceAll('{{REGISTRY}}', vars.REGISTRY));
+  }
+
+  const state = await readState(workbenchRoot);
+  return {
+    workbenchRoot, clients, allowDowngrade, vars, skillVersion, packageVersion: skillVersion,
+    baseFor: (id) => baseFor(state, id),
+    artifacts,
+  };
+}
+
+// --- provisioning: one-shot registration, not an artifact (see manifest.mjs for why) ---
+
+async function planProvisioning({primaryRoot, workbenchRoot, resolvedWorktree, resolvedBranch, linkPath, resolvedName, resolvedDir, originUrl}) {
+  const steps = [];
+  let blocked = false;
+  const record = (step, action, detail) => { const entry = {step, action, detail}; steps.push(entry); return entry; };
+
+  let worktreeAction;
+  if (await pathExists(resolvedWorktree)) {
+    const registered = git(primaryRoot, 'worktree', 'list', '--porcelain').split('\n').filter(l => l.startsWith('worktree '));
+    const realResolved = await realpath(resolvedWorktree);
+    const registeredReal = await Promise.all(registered.map(l => realpath(l.slice(9)).catch(() => null)));
+    if (registeredReal.includes(realResolved)) {
+      const currentBranch = git(resolvedWorktree, 'branch', '--show-current');
+      worktreeAction = currentBranch === resolvedBranch
+        ? record('worktree', 'unchanged', resolvedWorktree)
+        : (blocked = true, record('worktree', 'blocked', `Existing worktree at ${resolvedWorktree} is on branch "${currentBranch}", not "${resolvedBranch}"`));
+    } else if ((await readdir(resolvedWorktree)).length) {
+      blocked = true;
+      worktreeAction = record('worktree', 'blocked', `${resolvedWorktree} exists and is not a registered worktree of this repository`);
+    } else {
+      worktreeAction = record('worktree', 'create', resolvedWorktree);
+    }
+  } else {
+    worktreeAction = record('worktree', 'create', resolvedWorktree);
+  }
+
+  let branchConflict = false;
+  try { git(primaryRoot, 'rev-parse', '--verify', '--quiet', `refs/heads/${resolvedBranch}`); branchConflict = worktreeAction.action !== 'unchanged'; } catch { /* branch does not exist yet */ }
+  if (branchConflict) {
+    blocked = true;
+    record('branch', 'blocked', `Branch "${resolvedBranch}" already exists but is not the branch of the resolved worktree`);
+  } else {
+    record('branch', worktreeAction.action === 'unchanged' ? 'unchanged' : 'create', resolvedBranch);
+  }
+
+  let linkAction;
+  if (await pathExists(linkPath)) {
+    let linkTarget = null;
+    try { linkTarget = await realpath(linkPath); } catch { /* broken link */ }
+    const worktreeReal = await pathExists(resolvedWorktree) ? await realpath(resolvedWorktree) : null;
+    if (linkTarget && worktreeReal && linkTarget === worktreeReal) {
+      linkAction = record('link', 'unchanged', linkPath);
+    } else {
+      blocked = true;
+      linkAction = record('link', 'blocked', `${linkPath} exists and does not resolve to ${resolvedWorktree}`);
+    }
+  } else {
+    linkAction = record('link', 'create', linkPath);
+  }
+
+  const registryPath = join(workbenchRoot, '.linked-repos.json');
+  let registry = {version: 1, targets: {}};
+  if (await pathExists(registryPath)) {
+    registry = JSON.parse(await readFile(registryPath, 'utf8'));
+    if (registry.version !== 1 || !registry.targets) throw new Error('Unsupported target registry at ' + registryPath);
+  }
+  const desiredEntry = {path: resolvedDir, remote: originUrl, branch: resolvedBranch, upstream: 'origin/main'};
+  const existingEntry = registry.targets[resolvedName];
+  let registryAction;
+  if (existingEntry) {
+    const same = ['path', 'remote', 'branch', 'upstream'].every(k => existingEntry[k] === desiredEntry[k]);
+    registryAction = same
+      ? record('registry', 'unchanged', resolvedName)
+      : (blocked = true, record('registry', 'blocked', {name: resolvedName, existing: existingEntry, desired: desiredEntry}));
+  } else {
+    registryAction = record('registry', 'create', resolvedName);
+  }
+
+  return {steps, blocked, worktreeAction, linkAction, registryAction, registry, registryPath, desiredEntry};
+}
+
+async function mutateProvisioning(plan, {primaryRoot, workbenchRoot, resolvedWorktree, resolvedBranch, linkPath, resolvedName, fetchRemote}) {
+  const fetch = fetchRemote ?? ((root) => git(root, 'fetch', '--no-tags', 'origin'));
+  if (plan.worktreeAction.action === 'create') {
+    fetch(primaryRoot);
+    git(primaryRoot, 'worktree', 'add', '-b', resolvedBranch, resolvedWorktree, 'origin/main');
+    git(resolvedWorktree, 'branch', '--set-upstream-to', 'origin/main');
+  }
+  if (plan.linkAction.action === 'create') {
+    await mkdir(dirname(linkPath), {recursive: true});
+    await symlink(resolve(resolvedWorktree), linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  if (plan.registryAction.action === 'create') {
+    plan.registry.targets[resolvedName] = plan.desiredEntry;
+    await writeJsonAtomic(plan.registryPath, plan.registry);
+  }
+}
+
+// --- the manifest walk shared by link/apply ---
+
+async function planArtifacts(ctx) {
+  const applicable = ctx.artifacts.filter(e => applicableClients(e, ctx.clients));
+  const probed = [];
+  for (const entry of applicable) probed.push({entry, result: await probeArtifact(ctx, entry)});
+  const blocked = probed.some(({entry, result}) => isBlocking(result, entry, {allowDowngrade: ctx.allowDowngrade}) && !(ctx.force ?? []).includes(entry.id));
+  return {probed, blocked};
+}
+
+async function mutateArtifacts(ctx, probed) {
+  const stateUpdates = {};
+  const steps = [];
+  for (const {entry, result} of probed) {
+    if (!needsWrite(result)) { steps.push({step: result.id, kind: result.kind, dest: result.dest, action: result.state === 'current' ? 'unchanged' : result.state, detail: result.detail}); continue; }
+    const applied = await applyArtifact(ctx, entry, result);
+    steps.push({step: result.id, kind: result.kind, dest: result.dest, action: applied.action, detail: applied.detail ?? result.detail});
+    if (applied.hash) {
+      if (applied.multiKey) for (const k of applied.multiKey) stateUpdates[k] = applied.hash;
+      else stateUpdates[entry.id] = applied.hash;
     }
   }
-  if (await pathExists(root)) await walk(root);
-  return out;
+  if (Object.keys(stateUpdates).length) await writeState(ctx.workbenchRoot, ctx.packageVersion, stateUpdates);
+  return steps;
 }
 
-async function writeJsonAtomic(path, obj) {
-  const tmp = path + '.tmp-' + process.pid;
-  await writeFile(tmp, JSON.stringify(obj, null, 2) + '\n');
-  await rename(tmp, path);
+function plannedArtifactSteps(probed) {
+  return probed.map(({result}) => ({step: result.id, kind: result.kind, dest: result.dest, action: result.state === 'current' ? 'unchanged' : result.state, detail: result.detail}));
+}
+
+// --- self-verify: run the just-installed client's own inspect against the target ---
+
+async function findClientLinkedRepo(workbenchRoot) {
+  for (const p of [join(workbenchRoot, '.claude', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs'), join(workbenchRoot, '.agents', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')]) {
+    if (await pathExists(p)) return p;
+  }
+  return null;
 }
 
 /**
- * Builds a two-phase plan (checks, then mutations). Every step is recorded once during the
- * check phase; `link`/`update` only perform the mutations named `create`/`update`/`downgraded`
- * etc. when `yes` is true and nothing was blocked. Steps whose real outcome can only be known by
- * invoking a subprocess (skill install, self-verify) are recorded as `pending` in the plan and
- * replaced with their real outcome once actually run.
+ * Connects a new workbench: provisions the worktree/junction/registry entry, then applies the
+ * full artifact manifest in the same plan-then-mutate pass. Two phases: every check runs first
+ * (Phase A), and nothing is written unless `yes` is true and nothing was blocked (Phase B).
  */
 export async function connect(opts) {
   const {
@@ -81,11 +233,9 @@ export async function connect(opts) {
     dir,
     branch,
     worktreePath,
-    clients = ['claude', 'codex', 'copilot'],
+    clients = DEFAULT_CONNECT_CLIENTS,
     yes = false,
-    skipMcp = false,
-    skipContract = false,
-    updateContract = false,
+    force = [],
     allowDowngrade = false,
     fetchRemote,
     oversoulPath: oversoulOverride,
@@ -109,167 +259,20 @@ export async function connect(opts) {
   const resolvedWorktree = worktreePath || join(dirname(primaryRoot), `${basename(primaryRoot)}-worktrees`, sanitize(basename(workbenchRoot)));
   const linkPath = join(workbenchRoot, resolvedDir);
   const oversoulPath = await resolveOversoulPath(oversoulOverride);
-  const templatesDir = join(HERE, 'templates');
 
-  const steps = [];
   const warnings = [];
-  let blocked = false;
-  const record = (step, action, detail) => { const entry = {step, action, detail}; steps.push(entry); return entry; };
-
   if (git(primaryRoot, 'status', '--porcelain')) {
     warnings.push('Primary clone has uncommitted changes; worktree add does not touch them, but confirm origin/main is what you expect before relying on it.');
   }
 
-  // --- worktree ---
-  let worktreeAction;
-  if (await pathExists(resolvedWorktree)) {
-    const registered = git(primaryRoot, 'worktree', 'list', '--porcelain').split('\n').filter(l => l.startsWith('worktree '));
-    const realResolved = await realpath(resolvedWorktree);
-    const registeredReal = await Promise.all(registered.map(l => realpath(l.slice(9)).catch(() => null)));
-    if (registeredReal.includes(realResolved)) {
-      const currentBranch = git(resolvedWorktree, 'branch', '--show-current');
-      worktreeAction = currentBranch === resolvedBranch
-        ? record('worktree', 'unchanged', resolvedWorktree)
-        : (blocked = true, record('worktree', 'blocked', `Existing worktree at ${resolvedWorktree} is on branch "${currentBranch}", not "${resolvedBranch}"`));
-    } else if ((await readdir(resolvedWorktree)).length) {
-      blocked = true;
-      worktreeAction = record('worktree', 'blocked', `${resolvedWorktree} exists and is not a registered worktree of this repository`);
-    } else {
-      worktreeAction = record('worktree', 'create', resolvedWorktree);
-    }
-  } else {
-    worktreeAction = record('worktree', 'create', resolvedWorktree);
-  }
+  const provisioningPlan = await planProvisioning({primaryRoot, workbenchRoot, resolvedWorktree, resolvedBranch, linkPath, resolvedName, resolvedDir, originUrl});
 
-  // --- branch ---
-  let branchConflict = false;
-  try { git(primaryRoot, 'rev-parse', '--verify', '--quiet', `refs/heads/${resolvedBranch}`); branchConflict = worktreeAction.action !== 'unchanged'; } catch { /* branch does not exist yet */ }
-  if (branchConflict) {
-    blocked = true;
-    record('branch', 'blocked', `Branch "${resolvedBranch}" already exists but is not the branch of the resolved worktree`);
-  } else {
-    record('branch', worktreeAction.action === 'unchanged' ? 'unchanged' : 'create', resolvedBranch);
-  }
+  const ctx = await buildCtx({workbenchRoot, oversoulPath, target: {name: resolvedName, dir: resolvedDir, branch: resolvedBranch}, clients, allowDowngrade});
+  ctx.force = force;
+  const artifactPlan = await planArtifacts(ctx);
 
-  // --- link ---
-  let linkAction;
-  if (await pathExists(linkPath)) {
-    let linkTarget = null;
-    try { linkTarget = await realpath(linkPath); } catch { /* broken link */ }
-    const worktreeReal = await pathExists(resolvedWorktree) ? await realpath(resolvedWorktree) : null;
-    if (linkTarget && worktreeReal && linkTarget === worktreeReal) {
-      linkAction = record('link', 'unchanged', linkPath);
-    } else {
-      blocked = true;
-      linkAction = record('link', 'blocked', `${linkPath} exists and does not resolve to ${resolvedWorktree}`);
-    }
-  } else {
-    linkAction = record('link', 'create', linkPath);
-  }
-
-  // --- registry ---
-  const registryPath = join(workbenchRoot, '.linked-repos.json');
-  let registry = {version: 1, targets: {}};
-  if (await pathExists(registryPath)) {
-    registry = JSON.parse(await readFile(registryPath, 'utf8'));
-    if (registry.version !== 1 || !registry.targets) throw new Error('Unsupported target registry at ' + registryPath);
-  }
-  const desiredEntry = {path: resolvedDir, remote: originUrl, branch: resolvedBranch, upstream: 'origin/main'};
-  const existingEntry = registry.targets[resolvedName];
-  let registryAction;
-  if (existingEntry) {
-    const same = ['path', 'remote', 'branch', 'upstream'].every(k => existingEntry[k] === desiredEntry[k]);
-    registryAction = same
-      ? record('registry', 'unchanged', resolvedName)
-      : (blocked = true, record('registry', 'blocked', {name: resolvedName, existing: existingEntry, desired: desiredEntry}));
-  } else {
-    registryAction = record('registry', 'create', resolvedName);
-  }
-
-  // --- .gitignore ---
-  const gitignorePath = join(workbenchRoot, '.gitignore');
-  const requiredIgnoreLines = [`/${resolvedDir}/`, '/.linked-repos.json', '.claude/skills/oversoul/', '.agents/'];
-  let gitignoreAction = null;
-  if (await pathExists(join(workbenchRoot, '.git'))) {
-    const existingText = await pathExists(gitignorePath) ? await readFile(gitignorePath, 'utf8') : '';
-    const existingLines = new Set(existingText.split(/\r?\n/).map(l => l.trim()));
-    const missing = requiredIgnoreLines.filter(l => !existingLines.has(l));
-    gitignoreAction = missing.length
-      ? record('gitignore', 'update', {path: gitignorePath, adding: missing})
-      : record('gitignore', 'unchanged', gitignorePath);
-  }
-
-  // --- contract (AGENTS.md) ---
-  const sourceSkillVersion = parseVersion(await readFile(join(oversoulPath, 'SKILL.md'), 'utf8'));
-  const beginRe = /<!-- oversoul:linked-repository:begin[^>]*-->[\s\S]*?<!-- oversoul:linked-repository:end -->/;
-  let contractAction = null;
-  let renderedBlock = null;
-  if (!skipContract) {
-    const templateText = await readFile(join(templatesDir, 'linked-repository.md'), 'utf8');
-    const body = templateText
-      .replaceAll('{{TARGET}}', resolvedName)
-      .replaceAll('{{DIR}}', resolvedDir)
-      .replaceAll('{{BRANCH}}', resolvedBranch)
-      .replaceAll('{{REGISTRY}}', '.linked-repos.json')
-      .trim();
-    renderedBlock = `<!-- oversoul:linked-repository:begin v=${sourceSkillVersion} target=${resolvedName} -->\n${body}\n<!-- oversoul:linked-repository:end -->`;
-    const agentsPath = join(workbenchRoot, 'AGENTS.md');
-    const agentsText = await pathExists(agentsPath) ? await readFile(agentsPath, 'utf8') : '';
-    const match = beginRe.exec(agentsText);
-    if (match) {
-      if (match[0] === renderedBlock) contractAction = record('contract', 'unchanged', agentsPath);
-      else if (!updateContract) { blocked = true; contractAction = record('contract', 'blocked', `${agentsPath} has a differing linked-repository block; pass updateContract to replace it`); }
-      else contractAction = record('contract', 'update', agentsPath);
-    } else {
-      contractAction = record('contract', agentsText ? 'append' : 'create', agentsPath);
-    }
-  } else {
-    contractAction = record('contract', 'skipped', 'AGENTS.md');
-  }
-
-  // --- CLAUDE.md ---
-  let claudeMdAction = null;
-  if (clients.includes('claude')) {
-    const claudeMdPath = join(workbenchRoot, 'CLAUDE.md');
-    claudeMdAction = await pathExists(claudeMdPath) ? record('claude-md', 'unchanged', claudeMdPath) : record('claude-md', 'create', claudeMdPath);
-  }
-
-  // --- MCP wiring ---
-  const notionDecl = {type: 'http', url: 'https://mcp.notion.com/mcp'};
-  const mcpActions = [];
-  async function planJsonMcp(path, keyPath, stepName) {
-    const existed = await pathExists(path);
-    const obj = existed ? JSON.parse(await readFile(path, 'utf8')) : {};
-    let cursor = obj;
-    for (const k of keyPath.slice(0, -1)) cursor = (cursor[k] ??= {});
-    const lastKey = keyPath[keyPath.length - 1];
-    const existingValue = cursor[lastKey];
-    if (existingValue !== undefined) {
-      return JSON.stringify(existingValue) === JSON.stringify(notionDecl)
-        ? record(stepName, 'unchanged', path)
-        : record(stepName, 'preserved', {path, reason: 'A different notion entry already exists; not overwritten', existing: existingValue});
-    }
-    return record(stepName, existed ? 'update' : 'create', path);
-  }
-  async function planCodexMcp() {
-    const path = join(workbenchRoot, '.codex', 'config.toml');
-    const existed = await pathExists(path);
-    const text = existed ? await readFile(path, 'utf8') : '';
-    return text.includes('[mcp_servers.notion]')
-      ? record('mcp:.codex/config.toml', 'unchanged', path)
-      : record('mcp:.codex/config.toml', existed ? 'update' : 'create', path);
-  }
-  if (skipMcp) {
-    mcpActions.push(record('mcp', 'skipped', 'all clients'));
-  } else {
-    if (clients.includes('claude')) mcpActions.push(await planJsonMcp(join(workbenchRoot, '.mcp.json'), ['mcpServers', 'notion'], 'mcp:.mcp.json'));
-    if (clients.includes('copilot')) mcpActions.push(await planJsonMcp(join(workbenchRoot, '.vscode', 'mcp.json'), ['servers', 'notion'], 'mcp:.vscode/mcp.json'));
-    if (clients.includes('codex')) mcpActions.push(await planCodexMcp());
-  }
-
-  // --- skill install / self-verify: outcome only knowable by actually running them ---
-  record('install', yes ? 'pending' : 'planned', {clients, allowDowngrade});
-  record('self-verify', yes ? 'pending' : 'planned', resolvedName);
+  const blocked = provisioningPlan.blocked || artifactPlan.blocked;
+  const steps = [...provisioningPlan.steps, ...plannedArtifactSteps(artifactPlan.probed), {step: 'self-verify', action: 'planned', detail: resolvedName}];
 
   if (!yes) {
     return {status: 'planned', target: resolvedName, workbench: workbenchRoot, worktree: resolvedWorktree, link: linkPath, branch: resolvedBranch, steps, warnings};
@@ -278,140 +281,119 @@ export async function connect(opts) {
     return {status: 'blocked', target: resolvedName, workbench: workbenchRoot, steps, warnings};
   }
 
-  // --- Phase B: mutate ---
-  const fetch = fetchRemote ?? ((root) => git(root, 'fetch', '--no-tags', 'origin'));
-  if (worktreeAction.action === 'create') {
-    fetch(primaryRoot);
-    git(primaryRoot, 'worktree', 'add', '-b', resolvedBranch, resolvedWorktree, 'origin/main');
-    git(resolvedWorktree, 'branch', '--set-upstream-to', 'origin/main');
-  }
-  if (linkAction.action === 'create') {
-    await mkdir(dirname(linkPath), {recursive: true});
-    await symlink(resolve(resolvedWorktree), linkPath, process.platform === 'win32' ? 'junction' : 'dir');
-  }
-  if (registryAction.action === 'create') {
-    registry.targets[resolvedName] = desiredEntry;
-    await writeJsonAtomic(registryPath, registry);
-  }
-  if (gitignoreAction && gitignoreAction.action === 'update') {
-    const existingText = await pathExists(gitignorePath) ? await readFile(gitignorePath, 'utf8') : '';
-    const sep2 = existingText && !existingText.endsWith('\n') ? '\n' : '';
-    const block = `${sep2}# Linked knowledge-base worktree (added by connect)\n${gitignoreAction.detail.adding.join('\n')}\n`;
-    await writeFile(gitignorePath, existingText + block);
-  }
+  await mutateProvisioning(provisioningPlan, {primaryRoot, workbenchRoot, resolvedWorktree, resolvedBranch, linkPath, resolvedName, fetchRemote});
+  const artifactSteps = await mutateArtifacts(ctx, artifactPlan.probed);
 
-  // Skill install: real outcome comes from the installer itself.
-  const installIndex = steps.findIndex(s => s.step === 'install');
-  const installArgs = [...clients];
-  if (allowDowngrade) installArgs.push('--allow-downgrade');
-  installArgs.push('--scaffold-agents');
-  const installResult = spawnSync(process.execPath, [join(oversoulPath, 'scripts', 'install.mjs'), ...installArgs], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
-  const installOutcomes = (installResult.stdout || '').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {raw: l}; } });
-  steps[installIndex] = {step: 'install', action: installResult.status === 0 ? 'complete' : 'blocked', detail: {exitCode: installResult.status, outcomes: installOutcomes, stderr: installResult.stderr || undefined}};
-  if (installResult.status !== 0) blocked = true;
-
-  if (contractAction && ['create', 'append', 'update'].includes(contractAction.action)) {
-    // install.mjs may have just scaffolded AGENTS.md (or something else could have touched it);
-    // re-check against the file's actual current content rather than trusting the pre-install
-    // snapshot, so this write is correct regardless of what happened in between.
-    const agentsPath = join(workbenchRoot, 'AGENTS.md');
-    const agentsText = await pathExists(agentsPath) ? await readFile(agentsPath, 'utf8') : '';
-    const freshMatch = beginRe.exec(agentsText);
-    if (freshMatch && freshMatch[0] === renderedBlock) {
-      contractAction.action = 'unchanged';
-    } else if (freshMatch) {
-      await writeFile(agentsPath, agentsText.replace(beginRe, renderedBlock));
-    } else {
-      const sep2 = agentsText && !agentsText.endsWith('\n\n') ? (agentsText.endsWith('\n') ? '\n' : '\n\n') : '';
-      await writeFile(agentsPath, agentsText + sep2 + renderedBlock + '\n');
-    }
-  }
-  if (claudeMdAction && claudeMdAction.action === 'create') {
-    await writeFile(join(workbenchRoot, 'CLAUDE.md'), '@./AGENTS.md\n');
-  }
-  for (const action of mcpActions) {
-    if (!['create', 'update'].includes(action.action)) continue;
-    if (action.step === 'mcp:.codex/config.toml') {
-      const path = action.detail;
-      const existingText = await pathExists(path) ? await readFile(path, 'utf8') : '';
-      const block = `${existingText && !existingText.endsWith('\n') ? '\n' : ''}[mcp_servers.notion]\nurl = "https://mcp.notion.com/mcp"\n`;
-      await mkdir(dirname(path), {recursive: true});
-      await writeFile(path, existingText + block);
-    } else {
-      const path = action.detail;
-      const existed = await pathExists(path);
-      const obj = existed ? JSON.parse(await readFile(path, 'utf8')) : {};
-      const keyPath = action.step === 'mcp:.mcp.json' ? ['mcpServers', 'notion'] : ['servers', 'notion'];
-      let cursor = obj;
-      for (const k of keyPath.slice(0, -1)) cursor = (cursor[k] ??= {});
-      cursor[keyPath[keyPath.length - 1]] = notionDecl;
-      await mkdir(dirname(path), {recursive: true});
-      await writeJsonAtomic(path, obj);
-    }
-  }
-
-  // Self-verify: run the just-installed client's own inspect against the target.
-  const verifyIndex = steps.findIndex(s => s.step === 'self-verify');
-  const clientLinkedRepo = (await pathExists(join(workbenchRoot, '.claude', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')))
-    ? join(workbenchRoot, '.claude', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')
-    : (await pathExists(join(workbenchRoot, '.agents', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')))
-      ? join(workbenchRoot, '.agents', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')
-      : null;
-  if (clientLinkedRepo) {
-    const verifyResult = spawnSync(process.execPath, [clientLinkedRepo, 'inspect', '--target', resolvedName], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
+  const verifyLinkedRepo = await findClientLinkedRepo(workbenchRoot);
+  let selfVerify;
+  if (verifyLinkedRepo) {
+    const verifyResult = spawnSync(process.execPath, [verifyLinkedRepo, 'inspect', '--target', resolvedName], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
     let parsed; try { parsed = JSON.parse(verifyResult.stdout); } catch { parsed = {raw: verifyResult.stdout}; }
-    steps[verifyIndex] = {step: 'self-verify', action: verifyResult.status === 0 ? 'ready' : (verifyResult.status === 2 ? 'blocked' : 'unverified'), detail: parsed};
+    selfVerify = {step: 'self-verify', action: verifyResult.status === 0 ? 'ready' : (verifyResult.status === 2 ? 'blocked' : 'unverified'), detail: parsed};
   } else {
-    steps[verifyIndex] = {step: 'self-verify', action: 'skipped', detail: 'No installed client to verify with'};
+    selfVerify = {step: 'self-verify', action: 'skipped', detail: 'No installed client to verify with'};
   }
 
-  return {status: blocked ? 'blocked' : 'connected', target: resolvedName, workbench: workbenchRoot, worktree: resolvedWorktree, link: linkPath, branch: resolvedBranch, steps, warnings};
+  return {status: 'connected', target: resolvedName, workbench: workbenchRoot, worktree: resolvedWorktree, link: linkPath, branch: resolvedBranch, steps: [...provisioningPlan.steps, ...artifactSteps, selfVerify], warnings};
+}
+
+// --- read-only reporting ---
+
+async function loadRegisteredTarget(workbenchRoot, name) {
+  const registryPath = join(workbenchRoot, '.linked-repos.json');
+  if (!await pathExists(registryPath)) return {registered: false};
+  const registry = JSON.parse(await readFile(registryPath, 'utf8'));
+  const names = Object.keys(registry.targets ?? {});
+  const target = name ?? (names.length === 1 ? names[0] : undefined);
+  if (!target || !registry.targets[target]) return {registered: false, available: names};
+  return {registered: true, target, entry: registry.targets[target]};
+}
+
+async function probeProvisioningReadOnly(workbenchRoot, resolved) {
+  if (!resolved.registered) return [{step: 'registry', action: 'missing', detail: 'Not yet registered'}];
+  const {entry} = resolved;
+  const linkPath = join(workbenchRoot, entry.path);
+  const steps = [];
+  steps.push({step: 'registry', action: 'current', detail: resolved.target});
+  const linkOk = await pathExists(linkPath) && await realpath(linkPath).then(() => true).catch(() => false);
+  steps.push({step: 'link', action: linkOk ? 'current' : 'missing', detail: linkPath});
+  return steps;
+}
+
+/**
+ * Reports every artifact's state plus provisioning, touching nothing. `status` is the command
+ * that answers "am I current" -- the thing neither `link`/`update` nor `verify` could answer
+ * before this mechanism existed.
+ */
+export async function status(opts) {
+  const {workbench, name, clients = DEFAULT_REPORT_CLIENTS, oversoulPath: oversoulOverride} = opts;
+  const workbenchRoot = await realpath(resolve(workbench));
+  const resolved = await loadRegisteredTarget(workbenchRoot, name);
+  if (!resolved.registered) return {status: 'unregistered', workbench: workbenchRoot, available: resolved.available};
+
+  const oversoulPath = await resolveOversoulPath(oversoulOverride);
+  const provisioning = await probeProvisioningReadOnly(workbenchRoot, resolved);
+  const ctx = await buildCtx({workbenchRoot, oversoulPath, target: {name: resolved.target, dir: resolved.entry.path, branch: resolved.entry.branch}, clients});
+  const {probed} = await planArtifacts(ctx);
+  const artifacts = plannedArtifactSteps(probed);
+
+  const summary = {};
+  for (const a of artifacts) summary[a.action] = (summary[a.action] ?? 0) + 1;
+
+  return {status: 'reported', target: resolved.target, workbench: workbenchRoot, package: ctx.packageVersion, provisioning, artifacts, summary};
+}
+
+/**
+ * Brings every artifact that `status` would report as not current up to date -- installing a new
+ * client and updating an already-connected workbench are the same operation from here on.
+ * `force` names specific artifact ids allowed to overwrite a locally-modified/blocked state;
+ * without it, any such artifact stops the whole run with nothing written, same as a dry run.
+ */
+export async function apply(opts) {
+  const {workbench, name, clients = DEFAULT_REPORT_CLIENTS, yes = false, force = [], allowDowngrade = false, oversoulPath: oversoulOverride} = opts;
+  const workbenchRoot = await realpath(resolve(workbench));
+  const resolved = await loadRegisteredTarget(workbenchRoot, name);
+  if (!resolved.registered) return {status: 'unregistered', workbench: workbenchRoot, available: resolved.available};
+
+  const oversoulPath = await resolveOversoulPath(oversoulOverride);
+  const ctx = await buildCtx({workbenchRoot, oversoulPath, target: {name: resolved.target, dir: resolved.entry.path, branch: resolved.entry.branch}, clients, allowDowngrade});
+  ctx.force = force;
+  const {probed, blocked} = await planArtifacts(ctx);
+
+  if (!yes) return {status: 'planned', target: resolved.target, workbench: workbenchRoot, steps: plannedArtifactSteps(probed)};
+  if (blocked) return {status: 'blocked', target: resolved.target, workbench: workbenchRoot, steps: plannedArtifactSteps(probed)};
+
+  const steps = await mutateArtifacts(ctx, probed);
+  return {status: 'complete', target: resolved.target, workbench: workbenchRoot, steps};
+}
+
+/**
+ * `status` plus the existing Shrimp-side sync check, kept as two separate fields: a workbench's
+ * own tooling being current is a different question from the linked repository being in sync.
+ */
+export async function verify(opts) {
+  const {workbench, name} = opts;
+  const workbenchRoot = await realpath(resolve(workbench));
+  const s = await status({workbench, name});
+  const clientLinkedRepo = await findClientLinkedRepo(workbenchRoot);
+  if (!clientLinkedRepo) return {status: 'no-client-installed', workbench: workbenchRoot, artifacts: s};
+  const resolved = await loadRegisteredTarget(workbenchRoot, name);
+  const result = spawnSync(process.execPath, [clientLinkedRepo, 'inspect', '--target', resolved.target], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
+  let parsed; try { parsed = JSON.parse(result.stdout); } catch { parsed = {raw: result.stdout}; }
+  const artifactsCurrent = s.status === 'reported' && s.artifacts.every(a => ['unchanged', 'preserved'].includes(a.action));
+  const status_ = result.status === 0 ? (artifactsCurrent ? 'ready' : 'stale') : (result.status === 2 ? 'blocked' : 'unverified');
+  return {status: status_, exitCode: result.status, target: resolved.target, linkedRepo: parsed, artifacts: s};
 }
 
 export {parseVersion};
 
-async function statusOrVerify(command, opts) {
-  const {repoCwd = process.cwd(), workbench, name} = opts;
-  const workbenchRoot = await realpath(resolve(workbench));
-  const registryPath = join(workbenchRoot, '.linked-repos.json');
-  if (!await pathExists(registryPath)) return {status: 'unregistered', workbench: workbenchRoot};
-  const registry = JSON.parse(await readFile(registryPath, 'utf8'));
-  const names = Object.keys(registry.targets ?? {});
-  const target = name ?? (names.length === 1 ? names[0] : undefined);
-  if (!target || !registry.targets[target]) return {status: 'unregistered', workbench: workbenchRoot, available: names};
-  const clientLinkedRepo = (await pathExists(join(workbenchRoot, '.claude', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')))
-    ? join(workbenchRoot, '.claude', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')
-    : (await pathExists(join(workbenchRoot, '.agents', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')))
-      ? join(workbenchRoot, '.agents', 'skills', 'oversoul', 'scripts', 'linked-repo.mjs')
-      : null;
-  if (!clientLinkedRepo) return {status: 'no-client-installed', workbench: workbenchRoot, target, registered: registry.targets[target]};
-  const result = spawnSync(process.execPath, [clientLinkedRepo, 'inspect', '--target', target], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
-  let parsed; try { parsed = JSON.parse(result.stdout); } catch { parsed = {raw: result.stdout}; }
-  return {status: command === 'verify' ? (result.status === 0 ? 'ready' : (result.status === 2 ? 'blocked' : 'unverified')) : 'reported', exitCode: result.status, target, detail: parsed};
-}
-
-export const status = (opts) => statusOrVerify('status', opts);
-export const verify = (opts) => statusOrVerify('verify', opts);
-
-export async function update(opts) {
-  const {workbench, clients = ['claude', 'codex', 'copilot'], allowDowngrade = false, yes = false, oversoulPath: oversoulOverride} = opts;
-  const workbenchRoot = await realpath(resolve(workbench));
-  const oversoulPath = await resolveOversoulPath(oversoulOverride);
-  if (!yes) return {status: 'planned', workbench: workbenchRoot, clients, note: 'Pass yes to actually run the installer.'};
-  const args = [...clients];
-  if (allowDowngrade) args.push('--allow-downgrade');
-  const result = spawnSync(process.execPath, [join(oversoulPath, 'scripts', 'install.mjs'), ...args], {cwd: workbenchRoot, encoding: 'utf8', timeout: 60000});
-  const outcomes = (result.stdout || '').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {raw: l}; } });
-  return {status: result.status === 0 ? 'complete' : 'blocked', exitCode: result.status, outcomes, stderr: result.stderr || undefined};
-}
-
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const [command, ...rest] = process.argv.slice(2);
-    if (!['status', 'link', 'update', 'verify'].includes(command)) throw new Error('Use status, link, update, or verify');
+    if (!['status', 'link', 'apply', 'verify'].includes(command)) throw new Error('Use status, link, apply, or verify');
     const flags = new Map();
-    const listFlags = new Set(['--clients']);
-    const boolFlags = new Set(['--yes', '--skip-mcp', '--skip-contract', '--update-contract', '--allow-downgrade']);
+    const listFlags = new Set(['--clients', '--force']);
+    const boolFlags = new Set(['--yes', '--allow-downgrade', '--json']);
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (!a.startsWith('--')) throw new Error('Unknown argument: ' + a);
@@ -425,16 +407,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       branch: flags.get('--branch'),
       worktreePath: flags.get('--worktree'),
       clients: flags.has('--clients') ? flags.get('--clients').split(',') : undefined,
+      force: flags.has('--force') ? flags.get('--force').split(',') : undefined,
       yes: flags.get('--yes') === true,
-      skipMcp: flags.get('--skip-mcp') === true,
-      skipContract: flags.get('--skip-contract') === true,
-      updateContract: flags.get('--update-contract') === true,
       allowDowngrade: flags.get('--allow-downgrade') === true,
     };
     if (!opts.workbench) throw new Error('--workbench is required');
-    const result = command === 'link' ? await connect(opts) : command === 'status' ? await status(opts) : command === 'verify' ? await verify(opts) : await update(opts);
+    const result = command === 'link' ? await connect(opts) : command === 'status' ? await status(opts) : command === 'verify' ? await verify(opts) : await apply(opts);
     console.log(JSON.stringify(result, null, 2));
-    if (result.status === 'blocked' || result.status === 'unverified' || result.status === 'unregistered') process.exitCode = 2;
+    if (result.status === 'blocked' || result.status === 'unverified' || result.status === 'unregistered' || result.status === 'stale') process.exitCode = 2;
   } catch (e) {
     console.log(JSON.stringify({status: 'invalid', error: e.message}));
     process.exitCode = 1;
