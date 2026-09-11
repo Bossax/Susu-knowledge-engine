@@ -117,7 +117,11 @@ export async function operate(workbench,command,target,capability,args=[],fetchR
   const result=spawnSync(process.execPath,[c.entrypoint,...c.argv.slice(1),...args],{cwd:state.root,encoding:'utf8',timeout:60000,env:process.env});
   return {target:state.target,revision:state.revision,status:result.status===0?'complete':'unverified',exitCode:result.status,stdout:result.stdout,stderr:result.stderr,error:result.error?.message};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+// argv[1] needs realpath'ing before this comparison: import.meta.url is always the real path, so
+// invoking this through the linked-repository junction directly (rather than an installed
+// .agents/skills/oversoul/ copy) otherwise never matches and the CLI silently no-ops.
+const invokedPath=process.argv[1]?await realpath(resolve(process.argv[1])).catch(()=>resolve(process.argv[1])):null;
+if(invokedPath&&import.meta.url===pathToFileURL(invokedPath).href){
   try{
     const [major,minor]=process.versions.node.split('.').map(Number);if(major!==24||minor<11)throw new Error('Use Node 24.11+ within Node 24 LTS');
     const [command,...args]=process.argv.slice(2);const cut=args.indexOf('--');const flags=cut<0?args:args.slice(0,cut);const rest=cut<0?[]:args.slice(cut+1);
