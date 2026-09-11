@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {readFile, readdir} from 'node:fs/promises';
+import {readFile, readdir, realpath} from 'node:fs/promises';
 import {resolve, relative, join, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
@@ -29,7 +29,10 @@ export async function verifySync(sourcePath, vendoredPath) {
   return {inSync: !added.length && !removed.length && !changed.length, added, removed, changed};
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// See connect.mjs for why argv[1] needs realpath'ing before this comparison: import.meta.url is
+// always the real path, so invoking this through a junction/symlink otherwise never matches.
+const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => resolve(process.argv[1])) : null;
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
   try {
     const [sourcePath, vendoredPath] = process.argv.slice(2);
     if (!sourcePath || !vendoredPath) throw new Error('Usage: node verify-sync.mjs SOURCE_PATH VENDORED_PATH');

@@ -387,7 +387,13 @@ export async function verify(opts) {
 
 export {parseVersion};
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// import.meta.url is always the module's real path (Node resolves a junction/symlink when
+// loading it); process.argv[1] is whatever string the caller typed, which isn't realpath'd by
+// `resolve()` alone. Comparing the two unresolved means this never matches -- and the whole CLI
+// silently does nothing -- when invoked through the linked-repository junction itself, which is
+// exactly how a real workbench reaches this file. Realpath argv[1] first so both sides compare fairly.
+const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => resolve(process.argv[1])) : null;
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
   try {
     const [command, ...rest] = process.argv.slice(2);
     if (!['status', 'link', 'apply', 'verify'].includes(command)) throw new Error('Use status, link, apply, or verify');

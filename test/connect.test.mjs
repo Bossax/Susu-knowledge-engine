@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, writeFile, readFile, realpath, stat, readdir} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, realpath, stat, readdir, symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve, dirname, basename} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {connect, status, verify, apply} from '../connect.mjs';
 import {verifySync} from '../verify-sync.mjs';
 import {resolveRealOversoul} from './_paths.mjs';
@@ -282,6 +282,21 @@ test('verify-sync reports no drift against itself and reports differences after 
   assert.ok(drift.changed.includes('SKILL.md'));
   assert.ok(drift.added.includes('EXTRA.md'));
   assert.ok(drift.removed.length > 0);
+});
+
+test('the CLI actually runs when invoked through a directory junction, not just a direct path', async () => {
+  // Regression test: import.meta.url is always a module's real path, so comparing it against an
+  // un-realpath'd argv[1] silently never matches -- and the whole CLI no-ops, exit 0, no output --
+  // when reached through the same kind of directory junction a real workbench uses for its link
+  // to the shared repository. connect.mjs itself creates junctions this way (symlink(..., 'junction')
+  // on Windows, 'dir' elsewhere); this test reaches the real connector root through one the same way.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'connect-junction-test-')));
+  const junction = join(root, 'linked');
+  await symlink(CONNECTOR_ROOT, junction, process.platform === 'win32' ? 'junction' : 'dir');
+  const result = spawnSync(process.execPath, [join(junction, 'connect.mjs'), 'status', '--workbench', root], {encoding: 'utf8'});
+  assert.notEqual(result.stdout.trim(), '', 'CLI produced no output when invoked through a junction -- the entry-point check silently failed to match');
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, 'unregistered', JSON.stringify(parsed));
 });
 
 test('the connector source contains no literal reference to this specific shared repository or its owner', async () => {
