@@ -100,7 +100,8 @@ what changed in this session, starting from 0.2.0 above.
 - oversoul itself (`linked-repo.mjs`, `install.mjs`) is unchanged in this session. What changed
   around it: `connector/` now installs the skill by calling `installSkill` directly instead of
   spawning `install.mjs` as a subprocess, and the connector's own manifest-driven mechanism
-  (`status`/`apply`) replaced the old uneven `link`/`update` coverage — see
+  (`status`/`update`) replaced the old uneven `link`/`update` coverage, where the old `update`
+  only ever refreshed the skill files — see
   `connector/ACCEPTANCE.md`'s 2026-09-11 entry for that work.
 - All 14 oversoul tests still pass unchanged:
   `node --test workbench-adapters/oversoul/test/*.test.mjs`.

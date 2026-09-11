@@ -1,13 +1,13 @@
 ---
 name: oversoul
-description: Check synchronization/operational status of the linked shared knowledge repository, or create/update its shared artifacts (Work Thread, Task, proposal, decision) via its Notion MCP connection. Options include inspect (check sync diagnostics and open session gate), prepare (safe fast-forward upstream and open session gate), and run (execute repo capabilities). Invoke only when explicitly asked to check shared-repo status, reconcile it, or create/edit a shared thread/task/proposal there — never for ordinary session startup, recap, or general workbench/local-repo work.
+description: Check synchronization/operational status of the linked shared knowledge repository, or create/update its shared artifacts (Work Thread, Task, proposal, decision) via its Notion MCP connection. Options include inspect (check sync diagnostics and open session gate), prepare (safe fast-forward upstream and open session gate), and run (execute repo capabilities). Also answers literal `/oversoul status`/`/oversoul update` by running the connector's own status/update against the workbench's own files (the installed skill, AGENTS.md, MCP config) — never from a paraphrased request. Invoke only when explicitly asked to check shared-repo status, reconcile it, create/edit a shared thread/task/proposal there, or on one of the literal commands above — never for ordinary session startup, recap, or general workbench/local-repo work.
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # Oversoul
 
-Version: 2.0.0
+Version: 2.1.0
 
 Use the bundled `scripts/linked-repo.mjs` with Node 24.11+ from the user's workbench root.
 The workbench's ignored `.linked-repos.json` selects existing links and expected identities.
@@ -39,12 +39,37 @@ If registration is missing, explain the required registration; do not guess a re
    `ready` immediately before running anything and refuses if it's false — you do not need to, and
    should not, pre-judge this yourself.
 
+4. **status** (`node <workbench path>/tools/connect/connect.mjs status --workbench .`):
+   A different script entirely — `connect.mjs`, not `linked-repo.mjs` — that reports on the
+   *workbench's own files* (the installed skill, `AGENTS.md`'s linked-repository section, MCP
+   config, the access-guard script) rather than the linked repository's git state. Find it by
+   reading the target's `path` from `.linked-repos.json` and joining
+   `tools/connect/connect.mjs` onto it — never hardcode a directory name, since the user chose
+   it. Touches nothing. Only run this when the user types `/oversoul status` literally — see the
+   rule below.
+
+5. **update** (`node <workbench path>/tools/connect/connect.mjs update --workbench . --yes`):
+   Fixes whatever `status` reported as not current. If a file was edited by hand, it stops
+   instead of overwriting it — report that back to the user rather than passing `--force`
+   yourself. Same path-resolution rule as `status`. Only run this when the user types
+   `/oversoul update` literally — see the rule below.
+
+**Commands 4 and 5 run only on literal invocation, never from a paraphrase.** If the user says
+"the connector seems out of date" or "update the connector" in plain language, do not run
+`status` or `update` yourself — tell them to type `/oversoul status` or `/oversoul update`
+directly. This is narrower than commands 1–3: those may run from a natural-language request
+(`AGENTS.md` already covers exactly how far that license reaches for the linked repository).
+Commands 4 and 5 write to the workbench's own files, including ones the user may have edited by
+hand, so the trigger stays literal no matter how the request is phrased.
+
 ## Conversational Invocations
 
 - `/oversoul` or `/oversoul inspect`: Reports synchronization diagnostics and protocol state.
 - `/oversoul prepare`: Fast-forwards upstream changes and opens the session gate.
 - `/oversoul run <capability>`: Executes a specific capability from `protocol.json`.
 - `/oversoul target <NAME>`: Selects a specific registered target when multiple exist.
+- `/oversoul status`: Reports the workbench's own files' currency. Literal invocation only.
+- `/oversoul update`: Fixes what `/oversoul status` found. Literal invocation only.
 
 ## Operational Lifecycle
 
