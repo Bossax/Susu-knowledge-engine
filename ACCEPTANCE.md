@@ -74,3 +74,39 @@ Accepted package version: `0.2.0`.
 - The version-aware upgrade path, the `copilot` target, and `--scaffold-agents` have not yet been
   exercised on macOS.
 - No commit, push, merge, or live Notion mutation was performed in this stage either.
+
+---
+
+# Package acceptance — 2026-09-11, jumping straight to v2.0.0
+
+Human requester: Bossa. Recorder: Claude.
+
+Accepted package version: `2.0.0`. Note for whoever reads this next: this file was never updated
+through the whole 1.11.x line, including a real gate-closing bug fix and a wording fix to
+`SKILL.md` that both shipped and were verified in that window (see
+`ψ/memory/logs/info/` and `ψ/memory/learnings/` for that record instead). This entry only covers
+what changed in this session, starting from 0.2.0 above.
+
+## Verified
+
+- `SKILL.md`'s description of the gate rule ("dirty" means a real content change, not whatever
+  `git status` happened to print; "diverged" means both ahead and behind, not just ahead) replaced
+  a stale one that still matched the pre-fix code. An agent reading the old wording had no way to
+  know the rule had already changed underneath it — confirmed happening for real in a Copilot
+  session that read `ready: true` from a live check and still reported the gate as closed, because
+  it trusted the old wording over the field that actually answered the question.
+- Package version now tracks the requirements document version directly (both move to `2.0.0`
+  together), per the convention `ψ/active/requirements.md` states.
+- oversoul itself (`linked-repo.mjs`, `install.mjs`) is unchanged in this session. What changed
+  around it: `connector/` now installs the skill by calling `installSkill` directly instead of
+  spawning `install.mjs` as a subprocess, and the connector's own manifest-driven mechanism
+  (`status`/`apply`) replaced the old uneven `link`/`update` coverage — see
+  `connector/ACCEPTANCE.md`'s 2026-09-11 entry for that work.
+- All 14 oversoul tests still pass unchanged:
+  `node --test workbench-adapters/oversoul/test/*.test.mjs`.
+
+## Remaining acceptance
+
+- The 1.11.x gap above is real and not backfilled here — if something from that window turns out
+  to matter, the actual record is in `ψ/memory/`, not this file.
+- Everything else listed as remaining in the 0.2.0 section above is still remaining.
