@@ -11,7 +11,7 @@ Run from inside a primary clone of the shared knowledge-base repository:
 
 ```text
 node connect.mjs status --workbench <path> [--clients claude,codex,copilot,antigravity] [--json]
-node connect.mjs apply  --workbench <path> [--yes] [--force id1,id2] [--clients ...] [--allow-downgrade]
+node connect.mjs update --workbench <path> [--yes] [--force id1,id2] [--clients ...] [--allow-downgrade]
 node connect.mjs link   --workbench <path> [--yes] [--name NAME] [--dir DIR] [--branch BRANCH]
                          [--worktree PATH] [--clients claude,codex,copilot] [--allow-downgrade]
 node connect.mjs verify --workbench <path>
@@ -21,11 +21,11 @@ Two commands, used for almost everything:
 
 - **`status`** looks at every file the connector manages and says, for each one, whether it's
   current, out of date, missing, or edited by hand. It never writes anything.
-- **`apply`** fixes whatever `status` found. If a file was edited by hand, `apply` stops instead
+- **`update`** fixes whatever `status` found. If a file was edited by hand, `update` stops instead
   of overwriting it — pass `--force <id>`, naming that file specifically, to overwrite it anyway.
 
 `link` is for a workbench that isn't connected yet. It sets up the worktree, the junction, and the
-registry entry, then runs `apply` right after, so a brand-new workbench and an already-connected
+registry entry, then runs `update` right after, so a brand-new workbench and an already-connected
 one end up going through the same code path. Without `--yes`, it only prints what it would do.
 
 `link` stops (exit 2, nothing written) instead of acting when something already there doesn't

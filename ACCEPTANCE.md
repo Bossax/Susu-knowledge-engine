@@ -76,9 +76,10 @@ Human requester: Bossa. Recorder: Claude.
 - Replaced the uneven coverage above (one command writing twelve files, another writing one,
   two more writing none) with a single list of everything the package owns
   (`manifest.mjs`) and two commands that walk it: `status` reports each file's real state and
-  touches nothing, `apply` fixes what's not current. `update` is gone as a command name — `apply`
-  covers what it used to do and everything it used to miss. `link` now sets up a new workbench and
-  then runs `apply` in the same step, instead of being a separate, differently-covered path.
+  touches nothing, `update` fixes what's not current. The old, narrower `update` (skill files
+  only) is gone — the new `update` covers what it used to do and everything it used to miss.
+  `link` now sets up a new workbench and then runs `update` in the same step, instead of being a
+  separate, differently-covered path.
 - Every file is checked the same way: what should be there right now, what's actually there, and
   what was last written (recorded in `.agents/oversoul-artifacts.json`). That third piece is what
   lets the tool tell "the package changed" apart from "a person edited this by hand" — something a
@@ -96,7 +97,7 @@ Human requester: Bossa. Recorder: Claude.
   (removed — it said the same thing as the `AGENTS.md` section, and Copilot reads that directly).
 - Caught a real, live bug while building this: a workbench's `.agents/mcp_config.json` can end up
   with the same top-level key written twice, and `JSON.parse` silently keeps only the second one.
-  `status`/`apply` now call this out directly instead of quietly going along with whichever value
+  `status`/`update` now call this out directly instead of quietly going along with whichever value
   won.
 - 39 tests pass together (25 in this package, 14 in oversoul's, plus the existing shared-installer
   test): `node --test workbench-adapters/connector/test/*.test.mjs
@@ -113,7 +114,7 @@ Human requester: Bossa. Recorder: Claude.
 
 ## Remaining acceptance
 
-- `apply --yes` has not yet been run against the real workbench — two of its files (the guard
+- `update --yes` has not yet been run against the real workbench — two of its files (the guard
   script, the duplicate-key MCP file) would need `--force` or a hand fix first, and doing that is
   its own deliberate step, not something to run in passing.
 - macOS: not run there.

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {connect, status, apply} from '../connect.mjs';
+import {connect, status, update} from '../connect.mjs';
 import {resolveRealOversoul} from './_paths.mjs';
 
 const REAL_OVERSOUL = resolveRealOversoul(dirname(fileURLToPath(import.meta.url)));
@@ -50,7 +50,7 @@ test('a duplicate top-level key in the Antigravity MCP file is surfaced, not sil
   assert.match(entry.detail.reason, /duplicate|written 2 times/i);
 
   const before = await readFile(join(f.wb, '.agents', 'mcp_config.json'), 'utf8');
-  const result = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true});
+  const result = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true});
   assert.equal(result.status, 'blocked', JSON.stringify(result));
   // Nothing else was touched either -- a blocked artifact stops the whole run.
   assert.equal(await readFile(join(f.wb, '.agents', 'mcp_config.json'), 'utf8'), before);
@@ -61,7 +61,7 @@ test('a human edit to CLAUDE.md is preserved, not blocking, since that artifact 
   await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
   await writeFile(join(f.wb, 'CLAUDE.md'), 'Some hand-written project notes.\n');
 
-  const result = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot'], yes: true});
+  const result = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot'], yes: true});
   assert.equal(result.status, 'complete', JSON.stringify(result));
   const claudeMd = await readFile(join(f.wb, 'CLAUDE.md'), 'utf8');
   assert.match(claudeMd, /Some hand-written project notes/);

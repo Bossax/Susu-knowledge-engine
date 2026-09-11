@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve, dirname, basename} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {connect, status, verify, apply} from '../connect.mjs';
+import {connect, status, verify, update} from '../connect.mjs';
 import {verifySync} from '../verify-sync.mjs';
 import {resolveRealOversoul} from './_paths.mjs';
 
@@ -210,7 +210,7 @@ test('status and verify report a connected workbench without mutating it', async
   await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
   const before = await readFile(join(f.wb, '.linked-repos.json'), 'utf8');
 
-  // status/apply default to a wider client set than connect() does (see DEFAULT_REPORT_CLIENTS),
+  // status/update default to a wider client set than connect() does (see DEFAULT_REPORT_CLIENTS),
   // so an Antigravity-only gap is expected here and checked separately below -- pass the same
   // three clients connect() actually wired to get a clean "everything I asked for is current".
   const s = await status({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot']});
@@ -234,31 +234,31 @@ test('status on an unregistered workbench says so rather than failing', async ()
   assert.equal(s.status, 'unregistered');
 });
 
-test('apply without --yes plans without mutating, and a second apply is a no-op', async () => {
+test('update without --yes plans without mutating, and a second update is a no-op', async () => {
   const f = await fixture();
   await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
   const before = await readFile(join(f.wb, 'AGENTS.md'), 'utf8');
 
-  const planned = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot']});
+  const planned = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot']});
   assert.equal(planned.status, 'planned', JSON.stringify(planned));
   assert.equal(await readFile(join(f.wb, 'AGENTS.md'), 'utf8'), before);
 
-  const applied = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot'], yes: true});
+  const applied = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, clients: ['claude', 'codex', 'copilot'], yes: true});
   assert.equal(applied.status, 'complete', JSON.stringify(applied));
   for (const step of applied.steps) assert.equal(step.action, 'unchanged', JSON.stringify(step));
   assert.equal(await readFile(join(f.wb, 'AGENTS.md'), 'utf8'), before);
 });
 
-test('apply blocks on a locally-modified artifact until it is named with --force', async () => {
+test('update blocks on a locally-modified artifact until it is named with --force', async () => {
   const f = await fixture();
   await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
   await writeFile(join(f.wb, 'scripts', 'guardrail-check.mjs'), '// hand-edited\n');
 
-  const blocked = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true});
+  const blocked = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true});
   assert.equal(blocked.status, 'blocked', JSON.stringify(blocked));
   assert.equal(await readFile(join(f.wb, '.agents', 'scripts', 'guardrail-check.mjs'), 'utf8'), await readFile(join(CONNECTOR_ROOT, 'payload', 'guardrail-check.mjs'), 'utf8'));
 
-  const forced = await apply({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true, force: ['guardrail-script']});
+  const forced = await update({workbench: f.wb, name: 'Team', oversoulPath: REAL_OVERSOUL, yes: true, force: ['guardrail-script']});
   assert.equal(forced.status, 'complete', JSON.stringify(forced));
   const guard = await readFile(join(f.wb, 'scripts', 'guardrail-check.mjs'), 'utf8');
   const agentsGuard = await readFile(join(f.wb, '.agents', 'scripts', 'guardrail-check.mjs'), 'utf8');

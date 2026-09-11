@@ -57,7 +57,7 @@ async function resolveOversoulPath(override) {
 }
 
 const DEFAULT_CONNECT_CLIENTS = ['claude', 'codex', 'copilot'];
-// status/apply default to the full candidate set: the whole point of this mechanism is to
+// status/update default to the full candidate set: the whole point of this mechanism is to
 // surface drift, including a client that was wired up some other way than `link` (e.g. a
 // hand-added Antigravity MCP entry) and now has nobody checking it.
 const DEFAULT_REPORT_CLIENTS = ['claude', 'codex', 'copilot', 'antigravity'];
@@ -181,7 +181,7 @@ async function mutateProvisioning(plan, {primaryRoot, workbenchRoot, resolvedWor
   }
 }
 
-// --- the manifest walk shared by link/apply ---
+// --- the manifest walk shared by link/update ---
 
 async function planArtifacts(ctx) {
   const applicable = ctx.artifacts.filter(e => applicableClients(e, ctx.clients));
@@ -349,7 +349,7 @@ export async function status(opts) {
  * `force` names specific artifact ids allowed to overwrite a locally-modified/blocked state;
  * without it, any such artifact stops the whole run with nothing written, same as a dry run.
  */
-export async function apply(opts) {
+export async function update(opts) {
   const {workbench, name, clients = DEFAULT_REPORT_CLIENTS, yes = false, force = [], allowDowngrade = false, oversoulPath: oversoulOverride} = opts;
   const workbenchRoot = await realpath(resolve(workbench));
   const resolved = await loadRegisteredTarget(workbenchRoot, name);
@@ -396,7 +396,7 @@ const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).c
 if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
   try {
     const [command, ...rest] = process.argv.slice(2);
-    if (!['status', 'link', 'apply', 'verify'].includes(command)) throw new Error('Use status, link, apply, or verify');
+    if (!['status', 'link', 'update', 'verify'].includes(command)) throw new Error('Use status, link, update, or verify');
     const flags = new Map();
     const listFlags = new Set(['--clients', '--force']);
     const boolFlags = new Set(['--yes', '--allow-downgrade', '--json']);
@@ -418,7 +418,7 @@ if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
       allowDowngrade: flags.get('--allow-downgrade') === true,
     };
     if (!opts.workbench) throw new Error('--workbench is required');
-    const result = command === 'link' ? await connect(opts) : command === 'status' ? await status(opts) : command === 'verify' ? await verify(opts) : await apply(opts);
+    const result = command === 'link' ? await connect(opts) : command === 'status' ? await status(opts) : command === 'verify' ? await verify(opts) : await update(opts);
     console.log(JSON.stringify(result, null, 2));
     if (result.status === 'blocked' || result.status === 'unverified' || result.status === 'unregistered' || result.status === 'stale') process.exitCode = 2;
   } catch (e) {
