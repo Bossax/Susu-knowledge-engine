@@ -64,3 +64,58 @@ Human requester: Bossa. Recorder: Claude.
 - `update.mjs`'s `update` subcommand and `verify` subcommand are covered by one hermetic test
   each; they have not been exercised beyond that.
 - No commit, push, merge, or live Notion mutation was performed in this stage.
+
+---
+
+# Connector acceptance — 2026-09-11 (unified install/update mechanism, v2.0.0)
+
+Human requester: Bossa. Recorder: Claude.
+
+## Verified
+
+- Replaced the uneven coverage above (one command writing twelve files, another writing one,
+  two more writing none) with a single list of everything the package owns
+  (`manifest.mjs`) and two commands that walk it: `status` reports each file's real state and
+  touches nothing, `apply` fixes what's not current. `update` is gone as a command name — `apply`
+  covers what it used to do and everything it used to miss. `link` now sets up a new workbench and
+  then runs `apply` in the same step, instead of being a separate, differently-covered path.
+- Every file is checked the same way: what should be there right now, what's actually there, and
+  what was last written (recorded in `.agents/oversoul-artifacts.json`). That third piece is what
+  lets the tool tell "the package changed" apart from "a person edited this by hand" — something a
+  version number alone can't do, since most of these files (a `.gitignore` line, one key in a JSON
+  file) can't carry one.
+- A workbench connected before this mechanism existed gets real answers on its first `status`
+  check too, never "I don't know" — by checking whether required content is simply present, by
+  reading version numbers already embedded in files, or by matching against a list of previously
+  published file contents.
+- Brought four files that nothing previously tracked under the same mechanism: the access-guard
+  script (rewritten so it reads what to protect from the workbench's own `.linked-repos.json`
+  instead of having one repository's name typed into it — it can now ship as an ordinary managed
+  file, and got its first test suite, 8 tests), the untracked second copy of that script, the hook
+  entry in `.claude/settings.json` that turns it on, and `.github/copilot-instructions.md`
+  (removed — it said the same thing as the `AGENTS.md` section, and Copilot reads that directly).
+- Caught a real, live bug while building this: a workbench's `.agents/mcp_config.json` can end up
+  with the same top-level key written twice, and `JSON.parse` silently keeps only the second one.
+  `status`/`apply` now call this out directly instead of quietly going along with whichever value
+  won.
+- 39 tests pass together (25 in this package, 14 in oversoul's, plus the existing shared-installer
+  test): `node --test workbench-adapters/connector/test/*.test.mjs
+  workbench-adapters/oversoul/test/*.test.mjs workbench-adapters/_shared/test/*.test.mjs`.
+- Ran `status` against the real workbench. It correctly found exactly what was already known to
+  be wrong there — the duplicate-key file, a missing Codex Notion entry, a missing Copilot Notion
+  entry, an `AGENTS.md` with no section yet — and reported nothing as unknown.
+
+## Known, honest limitation
+
+- Same one as the entry above: a subprocess spawned during `link`'s self-check does a real
+  network fetch that can't reach a fixture's fake GitHub URL, so it reports one expected,
+  non-fatal diagnostic rather than a false "ready". Unrelated to this stage's own work.
+
+## Remaining acceptance
+
+- `apply --yes` has not yet been run against the real workbench — two of its files (the guard
+  script, the duplicate-key MCP file) would need `--force` or a hand fix first, and doing that is
+  its own deliberate step, not something to run in passing.
+- macOS: not run there.
+- This package's `README.md` now matches the new commands; `VENDORING.md` and the two
+  human-facing HTML guides have also been brought up to date in the same session.

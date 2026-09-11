@@ -1,47 +1,57 @@
 # Connector package
 
-The provisioning tool that `workbench-adapters/oversoul/` explicitly does not attempt: cloning
-worktree/junction/registry setup for a new workbench. Human-invoked bootstrap only — never a
-`protocol.json` capability, never run by an agent without explicit per-invocation instruction.
+This is the tool that sets up a workbench's link to the shared knowledge-base repo, and keeps
+every file that link depends on up to date afterward. It's the one piece `oversoul/` deliberately
+doesn't do itself: cloning, worktree setup, and writing the files each agent client needs.
+
+It's human-invoked only. Never a `protocol.json` capability, never run by an agent unless a person
+explicitly asked for it in that moment.
 
 Run from inside a primary clone of the shared knowledge-base repository:
 
 ```text
-node connect.mjs status --workbench <path>
+node connect.mjs status --workbench <path> [--clients claude,codex,copilot,antigravity] [--json]
+node connect.mjs apply  --workbench <path> [--yes] [--force id1,id2] [--clients ...] [--allow-downgrade]
 node connect.mjs link   --workbench <path> [--yes] [--name NAME] [--dir DIR] [--branch BRANCH]
-                         [--worktree PATH] [--clients claude,codex,copilot]
-                         [--skip-mcp] [--skip-contract] [--update-contract] [--allow-downgrade]
-node connect.mjs update --workbench <path> [--yes] [--allow-downgrade]
+                         [--worktree PATH] [--clients claude,codex,copilot] [--allow-downgrade]
 node connect.mjs verify --workbench <path>
 ```
 
-Without `--yes`, `link` computes and prints the full plan — what it would create, leave
-unchanged, or refuse — and mutates nothing. The two steps whose outcome can only be known by
-actually invoking a subprocess (the skill installer, the final self-verifying `inspect`) are
-reported as `planned` rather than predicted.
+Two commands, used for almost everything:
 
-`link` refuses (exit 2, no mutation) rather than acting when: the intended worktree path is
-occupied by something that isn't the expected worktree; the intended branch already exists
-elsewhere; the intended link path exists and doesn't already resolve to the intended worktree; or
-a registry entry with the same name already points somewhere different. A dirty primary clone is
-reported as a warning, not a refusal — `git worktree add` never touches it.
+- **`status`** looks at every file the connector manages and says, for each one, whether it's
+  current, out of date, missing, or edited by hand. It never writes anything.
+- **`apply`** fixes whatever `status` found. If a file was edited by hand, `apply` stops instead
+  of overwriting it — pass `--force <id>`, naming that file specifically, to overwrite it anyway.
 
-Connecting a workbench sets up the access guardrails: direct file reads, writes, and commands
-against the linked repository directory are blocked across supported agent clients (Claude Code,
-Codex CLI, Antigravity, GitHub Copilot). The active session gate lease (`.agents/oversoul-gate.json`)
-must be opened via `oversoul inspect` or `oversoul prepare` before operations can proceed.
+`link` is for a workbench that isn't connected yet. It sets up the worktree, the junction, and the
+registry entry, then runs `apply` right after, so a brand-new workbench and an already-connected
+one end up going through the same code path. Without `--yes`, it only prints what it would do.
 
-`connect.mjs` locates the `oversoul` package next to itself: nested under `./oversoul` (the
-layout after vendoring into a shared repository) or, failing that, as the sibling
-`../oversoul` (the layout in this workbench's development tree). The same file works unmodified
-in both places.
+`link` stops (exit 2, nothing written) instead of acting when something already there doesn't
+match what it expects: the worktree path is occupied by something else, the branch already exists
+somewhere else, the link path points elsewhere, or a registry entry under the same name points to
+a different remote. A dirty primary clone is reported as a warning, not a reason to stop —
+`git worktree add` never touches it.
 
-`verify-sync.mjs` is a separate, read-only drift detector for release time — it hashes every file
-in a maintained source package and a vendored copy and reports what's added, removed, or changed.
-It takes the source path as an argument; it has no idea (and should never be given a reason to
-care) whether that source is this workbench or, eventually, a central connector package shared
-across multiple knowledge-base repositories.
+Connecting a workbench also turns on the access guardrails: direct file reads, writes, and shell
+commands against the linked repository are blocked across every supported agent client (Claude
+Code, Codex CLI, Antigravity, GitHub Copilot) until the session gate
+(`.agents/oversoul-gate.json`) is opened via `oversoul inspect` or `oversoul prepare`. The guard
+figures out what to protect by reading the workbench's own `.linked-repos.json`, so it doesn't
+need one repository's name written into it.
 
-Tests: `node --test test/*.test.mjs`. Hermetic — temporary directories and a local bare
-repository standing in for "origin"; nothing touches GitHub, the real workbench, or the real
+`connect.mjs` finds the `oversoul` package next to itself: nested under `./oversoul` once
+vendored into a shared repository, or as the sibling `../oversoul` in this workbench's own
+development tree. The same file works unmodified in both places, and the same logic now resolves
+`_shared/` too — `connect.mjs` sits one level shallower once vendored, since vendoring drops this
+package's own folder name while `oversoul/` and `_shared/` keep theirs.
+
+`verify-sync.mjs` is a separate, read-only tool for release time. It hashes every file in a
+maintained source package and a vendored copy and reports what's added, removed, or changed. It
+takes the source path as an argument and has no opinion about what that source is — today it's
+this workbench, and nothing about the tool assumes that stays true.
+
+Tests: `node --test test/*.test.mjs`. Everything runs against temporary directories and a local
+bare repository standing in for "origin" — nothing touches GitHub, the real workbench, or the real
 Shrimp worktree.
