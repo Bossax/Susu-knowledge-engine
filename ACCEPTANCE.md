@@ -111,3 +111,59 @@ what changed in this session, starting from 0.2.0 above.
 - The 1.11.x gap above is real and not backfilled here — if something from that window turns out
   to matter, the actual record is in `ψ/memory/`, not this file.
 - Everything else listed as remaining in the 0.2.0 section above is still remaining.
+
+# Package acceptance — 2026-09-11, backfilled 2026-09-12 for v2.1.0
+
+Human requester: Bossa. Recorder: Claude.
+
+Accepted package version: `2.1.0`. Backfilled a session late: commit `96718da` shipped and
+bumped `SKILL.md`/`README.md` to 2.1.0 without an entry here — the same "output looks done but
+nothing durable recorded" gap this file exists to prevent, just in this file instead of a task
+record. See `ψ/memory/learnings/2026-09-12_verification-pipeline-is-not-the-persistence-step.md`
+for the general pattern this repeats.
+
+## Verified
+
+- Renamed the connector's command throughout: `apply` → `update` (`connect.mjs`'s exported
+  function and CLI verb, both test files, README.md, both ACCEPTANCE.md entries, VENDORING.md,
+  the HTML guide). Internal per-file-kind handlers (`_shared/artifacts/*.mjs`) stayed named
+  `apply()` — implementation plumbing nobody types or sees, not the same surface.
+- Added `/oversoul status` and `/oversoul update`: literal-invocation-only commands running the
+  connector's `status`/`update` against the workbench's own files. Narrower than the other three
+  `/oversoul` commands (those may run from a natural-language request; these two may not, since
+  they can overwrite a file a person edited by hand). Documented in `SKILL.md`.
+- Continued the connector guide's plain-language pass: fixed a merge-artifact stray closing tag,
+  replaced vague "plan only"/"mutates" chip labels with what they actually do, cut "if clean"/
+  "dirty" language in favor of the `ready`/`diagnostics` precision used elsewhere.
+- `ψ/active/requirements.md` amended to v2.1.0 alongside the package version, per the convention
+  the earlier 2.0.0 entry established.
+- oversoul itself (`linked-repo.mjs`, `install.mjs`) unchanged this cycle.
+
+## Remaining acceptance
+
+- Everything listed as remaining in the 2.0.0 section above is still remaining.
+
+# Package acceptance — 2026-09-12
+
+Human requester: Bossa. Recorder: Claude.
+
+Accepted package version: `2.1.1`.
+
+## Verified
+
+- `SKILL.md`'s capability-example list referenced the CLI verbs before Shrimp's own rename of
+  `inventory`→`list` and `session`→`compare` (see Shrimp's `protocol.json`/`src/cli.ts`, this
+  session, not yet merged to Shrimp's `main`). Updated the example to `doctor`, `compare`, `list`,
+  `normalize-snapshot` so it doesn't describe capability names that no longer exist once Shrimp's
+  side lands.
+- `linked-repo.mjs`/`install.mjs` unchanged this cycle; the fix is documentation-only.
+- All 13 oversoul tests still pass unchanged: `node --test workbench-adapters/oversoul/test/*.test.mjs`.
+
+## Remaining acceptance
+
+- Shrimp's own `README.md` still says "Susu Knowledge Engine V 2.1.0" — that line needs updating
+  to 2.1.1 too, but Shrimp's worktree is currently dirty with its own pending, uncommitted changes
+  (the `list`/`compare` rename and related fixes), so the session gate reports `ready: false` and
+  that edit is deliberately held rather than made against a blocked gate. Do it once those changes
+  are committed and the gate reopens clean.
+- Everything listed as remaining in the 2.1.0 section above is still remaining.
