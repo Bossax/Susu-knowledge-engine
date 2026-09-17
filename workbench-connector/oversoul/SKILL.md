@@ -27,6 +27,11 @@ If registration is missing, explain the required registration; do not guess a re
    prepared for a human-approved local commit. A non-empty `drift` never closes the gate; only
    `ready`/`diagnostics` say that. Report `drift` to the user as informational context, not as a
    reason access was denied.
+   An `engineAlignment` field reports whether the installed connector matches Shrimp's approved
+   release, by both `engineRelease` and (once at least one alignment has recorded one) bundle
+   hash — a matching version string with a mismatched hash means a corrupted or re-published
+   package under the same version, not a real match, and closes the gate (`action:'failed'`) with
+   a `reason` explaining why.
 
 2. **prepare** (`node <skill>/scripts/linked-repo.mjs prepare [--target NAME]`):
    Fast-forwards a branch that is strictly behind upstream (`git merge --ff-only @{upstream}`), but

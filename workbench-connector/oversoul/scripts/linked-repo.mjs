@@ -106,24 +106,34 @@ export async function replaceTree(target,staged,renamePath=rename){
 // Shrimp is ahead. No `.shrimp/release.json` (today's real Shrimp) is a no-op, not a block --
 // this must not close the gate on a Shrimp that hasn't adopted release tracking yet. A locally
 // newer installation is never downgraded. Integrity comes from `root` already being an inspected,
-// fetched Git worktree by the time this runs; nothing here re-verifies a bundle hash.
+// fetched Git worktree by the time this runs.
+// Each successful align stamps the local engine.json with the bundle hash it aligned to, so a
+// later gate check can tell "same engineRelease string, different actual bytes" apart from a
+// genuine match -- compareVersions alone cannot see that. A local engine.json with no recorded
+// hash yet (never aligned through this path, e.g. a plain dev-checkout install) has nothing to
+// compare, so it is left unverified rather than flagged -- there is no false claim to make either way.
 async function alignEngine(root,ownRoot){
   let release;
   try{release=JSON.parse(await readFile(join(root,'.shrimp','release.json'),'utf8'));}
   catch{return {action:'not-tracked'};}
   const approved=release.engineRelease;
-  const installed=JSON.parse(await readFile(join(ownRoot,'engine.json'),'utf8')).engineRelease;
+  const localEngine=JSON.parse(await readFile(join(ownRoot,'engine.json'),'utf8'));
+  const installed=localEngine.engineRelease;
   const cmp=compareVersions(approved,installed);
-  if(cmp===0)return {action:'current',installed,approved};
+  if(cmp===0){
+    if(localEngine.bundleHash&&release.bundleHash&&localEngine.bundleHash!==release.bundleHash)
+      return {action:'failed',installed,approved,reason:`Locally installed bundle hash (${localEngine.bundleHash}) does not match Shrimp's approved release (${release.bundleHash}); reinstall from the approved package`};
+    return {action:'current',installed,approved,bundleHash:release.bundleHash};
+  }
   if(cmp<0)return {action:'ahead',installed,approved};
   const source=join(root,'.shrimp','system','connector','oversoul');
   if(await readSkillName(source)!=='oversoul')return {action:'failed',installed,approved,reason:"Shrimp's approved connector package is missing or invalid"};
   const staged=`${ownRoot}.tmp-${process.pid}-${Date.now()}`;
   try{
     await cp(source,staged,{recursive:true,errorOnExist:true,force:false});
-    await writeFile(join(staged,'engine.json'),JSON.stringify({engineRelease:approved},null,2)+'\n');
+    await writeFile(join(staged,'engine.json'),JSON.stringify({engineRelease:approved,bundleHash:release.bundleHash},null,2)+'\n');
     await replaceTree(ownRoot,staged);
-    return {action:'aligned',from:installed,to:approved};
+    return {action:'aligned',from:installed,to:approved,bundleHash:release.bundleHash};
   }catch(error){
     await rm(staged,{recursive:true,force:true});
     return {action:'failed',installed,approved,reason:error.message};

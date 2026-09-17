@@ -54,7 +54,7 @@ test('a matching approved release requires no alignment',async()=>{
   const f=await fixture('0.1.0');
   await adoptRelease(f.wt,'0.1.0');
   const result=await f.inspect();
-  assert.deepEqual(result.engineAlignment,{action:'current',installed:'0.1.0',approved:'0.1.0'});
+  assert.deepEqual(result.engineAlignment,{action:'current',installed:'0.1.0',approved:'0.1.0',bundleHash:'sha256:'+'0'.repeat(64)});
   assert.equal(result.ready,true,JSON.stringify(result));
 });
 
@@ -66,13 +66,34 @@ test('a newer approved release replaces the installed oversoul skill in place',a
   assert.equal(result.engineAlignment.action,'aligned');
   assert.equal(result.engineAlignment.from,'0.1.0');
   assert.equal(result.engineAlignment.to,'0.2.0');
+  assert.equal(result.engineAlignment.bundleHash,'sha256:'+'0'.repeat(64));
   assert.equal(result.ready,true,JSON.stringify(result));
-  assert.equal(JSON.parse(await readFile(join(f.own,'engine.json'),'utf8')).engineRelease,'0.2.0');
+  const installedEngine=JSON.parse(await readFile(join(f.own,'engine.json'),'utf8'));
+  assert.equal(installedEngine.engineRelease,'0.2.0');
+  assert.equal(installedEngine.bundleHash,'sha256:'+'0'.repeat(64),'the aligned bundle hash is stamped locally so a later check can compare it');
   assert.match(await readFile(join(f.own,'SKILL.md'),'utf8'),/connector payload 0\.2\.0/);
   assert.equal(await exists(join(f.own,'STALE.md')),false,'the whole tree is replaced, not merged');
 
   const again=await f.inspect();
-  assert.deepEqual(again.engineAlignment,{action:'current',installed:'0.2.0',approved:'0.2.0'});
+  assert.deepEqual(again.engineAlignment,{action:'current',installed:'0.2.0',approved:'0.2.0',bundleHash:'sha256:'+'0'.repeat(64)});
+});
+test('a matching engineRelease string with a different bundle hash is a mismatch, not a match',async()=>{
+  const f=await fixture('0.1.0');
+  await adoptRelease(f.wt,'0.2.0');
+  const first=await f.inspect();
+  assert.equal(first.engineAlignment.action,'aligned');
+  // Shrimp's approved release is edited to the same engineRelease string but a different bundle
+  // hash -- a corrupted or re-published package under the same version, not a genuine re-align.
+  // compareVersions alone would call this "current"; the stamped local hash must catch it.
+  const release=JSON.parse(await readFile(join(f.wt,'.shrimp','release.json'),'utf8'));
+  release.bundleHash='sha256:'+'1'.repeat(64);
+  await writeFile(join(f.wt,'.shrimp','release.json'),JSON.stringify(release,null,2)+'\n');
+  git(f.wt,'add','.shrimp');git(f.wt,'commit','-q','-m','tamper');
+  const second=await f.inspect();
+  assert.equal(second.engineAlignment.action,'failed');
+  assert.match(second.engineAlignment.reason,/bundle hash/);
+  assert.match(second.diagnostics.join(),/Engine alignment failed/);
+  assert.equal(second.ready,false,JSON.stringify(second));
 });
 
 test('a locally newer installation is never downgraded',async()=>{
