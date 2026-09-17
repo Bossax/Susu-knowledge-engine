@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "npm test && node workbench-connector/oversoul/scripts/validate-skill.mjs"
+    "check": "npm test && node workbench-connector/oversoul/scripts/validate-skill.mjs",
+    "pack": "node scripts/pack.mjs"
   }
 }
