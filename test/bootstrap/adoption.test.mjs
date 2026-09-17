@@ -5,10 +5,9 @@ import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {connect, status} from '../connect.mjs';
-import {resolveRealOversoul} from './_paths.mjs';
+import {connect, status} from '../../workbench-connector/bootstrap/connect.mjs';
 
-const REAL_OVERSOUL = resolveRealOversoul(dirname(fileURLToPath(import.meta.url)));
+const REAL_OVERSOUL = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'workbench-connector', 'oversoul');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim();
 
 async function fixture() {

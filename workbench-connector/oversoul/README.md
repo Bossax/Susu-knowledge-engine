@@ -1,11 +1,9 @@
 # Oversoul package
 
-Current version: **2.1.1**.
-
 Node 24.11+ (24 LTS) and Git are required. No package installation is needed for the client.
 
 From the workbench root run
-`node workbench-adapters/oversoul/scripts/install.mjs codex claude copilot`. This installs the
+`node workbench-connector/oversoul/scripts/install.mjs codex claude copilot`. This installs the
 same package at project scope: `.claude/skills/oversoul` for Claude Code and
 `.agents/skills/oversoul` shared by Codex and Copilot. These ignored copies belong only to this
 workbench; there is no user-global installation. Use `$oversoul` in Codex or `/oversoul` in
@@ -14,8 +12,8 @@ Claude Code while working in this project.
 The installer is version-aware: an absent target is installed, an equal version is left
 unchanged, a newer source upgrades an older installation in place (removing any file the old
 installation had that the new one doesn't), and an installed version newer than the source is
-refused unless `--allow-downgrade` is passed. An installation whose `SKILL.md` version can't be
-parsed is never silently overwritten — move it aside first. Restart the client session after an
+refused unless `--allow-downgrade` is passed. A legacy installation with a valid `SKILL.md` version
+is migrated to the engine release model. Unreadable metadata blocks replacement. Restart the client session after an
 install or upgrade if its skill list was already loaded.
 
 If the project has no `AGENTS.md` yet, pass `--scaffold-agents` to create a minimal one instead
@@ -57,6 +55,6 @@ configuration, executable and arbitrary shell overrides are not accepted.
 Direct read and write access to the linked repository is blocked until `inspect` or `prepare` opens
 the session gate lease.
 
-Tests: `node --test test/*.test.mjs`. Tests use temporary local Git repositories and directories
+Tests: `npm test`. Tests use temporary local Git repositories and directories
 and inject only the fetch transport; they do not contact GitHub, npm, or mutate the real
 workbench or worktree.

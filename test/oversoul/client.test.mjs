@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,symlink,realpath,stat} from 'node:fs/pr
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {identity,inspect as inspectReal,operate as operateReal,manifest,GATE_LEASE_FILE} from '../scripts/linked-repo.mjs';
+import {identity,inspect as inspectReal,operate as operateReal,manifest,GATE_LEASE_FILE} from '../../workbench-connector/oversoul/scripts/linked-repo.mjs';
 const transports=new Map();
 const inspect=(wb)=>inspectReal(wb,undefined,true,transports.get(wb));
 const operate=(wb,command,target,capability)=>operateReal(wb,command,target,capability,[],transports.get(wb));
@@ -28,7 +28,7 @@ async function fixture(){
   await writeFile(join(wb,'.linked-repos.json'),JSON.stringify({version:1,targets:{Team:{path:'Team',remote:'https://github.com/example/team.git',branch:'workbench',upstream:'origin/main'}}}));
   return {root,primary,remote,wb,wt};
 }
-test('SSH and HTTPS identity canonicalization',()=>assert.equal(identity('git@github.com:Bossax/Soniferous-Shrimp.git'),identity('https://github.com/Bossax/Soniferous-Shrimp')));
+test('SSH and HTTPS identity canonicalization',()=>assert.equal(identity('git@github.com:example/team.git'),identity('https://github.com/example/team')));
 test('preflight, safe fast-forward, run, dirty preservation, ahead and divergence',async()=>{
   const f=await fixture();
   const initial=await inspect(f.wb);assert.equal(initial.ready,true,JSON.stringify(initial));

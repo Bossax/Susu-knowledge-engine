@@ -1,13 +1,9 @@
 ---
 name: oversoul
 description: Check synchronization/operational status of the linked shared knowledge repository, or create/update its shared artifacts (Work Thread, Task, proposal, decision) via its Notion MCP connection. Options include inspect (check sync diagnostics and open session gate), prepare (safe fast-forward upstream and open session gate), and run (execute repo capabilities). Also answers literal `/oversoul status`/`/oversoul update` by running the connector's own status/update against the workbench's own files (the installed skill, AGENTS.md, MCP config) — never from a paraphrased request. Invoke only when explicitly asked to check shared-repo status, reconcile it, create/edit a shared thread/task/proposal there, or on one of the literal commands above — never for ordinary session startup, recap, or general workbench/local-repo work.
-metadata:
-  version: 2.1.1
 ---
 
 # Oversoul
-
-Version: 2.1.1
 
 Use the bundled `scripts/linked-repo.mjs` with Node 24.11+ from the user's workbench root.
 The workbench's ignored `.linked-repos.json` selects existing links and expected identities.

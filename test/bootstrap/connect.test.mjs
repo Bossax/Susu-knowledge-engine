@@ -1,16 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, writeFile, readFile, realpath, stat, readdir, symlink} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, realpath, stat, symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve, dirname, basename} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {connect, status, verify, update} from '../connect.mjs';
-import {verifySync} from '../verify-sync.mjs';
-import {resolveRealOversoul} from './_paths.mjs';
+import {connect, status, verify, update} from '../../workbench-connector/bootstrap/connect.mjs';
 
-const CONNECTOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const REAL_OVERSOUL = resolveRealOversoul(dirname(fileURLToPath(import.meta.url)));
+const CONNECTOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'workbench-connector', 'bootstrap');
+const REAL_OVERSOUL = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'workbench-connector', 'oversoul');
 const {inspect: inspectOversoul} = await import(pathToFileURL(join(REAL_OVERSOUL, 'scripts', 'linked-repo.mjs')).href);
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim();
 const exists = async (p) => { try { await stat(p); return true; } catch { return false; } };
@@ -62,7 +60,6 @@ test('a dry run reports the full plan and mutates nothing', async () => {
   assert.equal(await exists(join(f.wb, 'Team')), false);
   assert.equal(await exists(join(f.wb, '.agents', 'oversoul-artifacts.json')), false);
 });
-
 test('a full connect run wires worktree, link, registry, skill, contract, and MCP', async () => {
   const f = await fixture();
   const result = await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
@@ -134,7 +131,6 @@ test('a full connect run wires worktree, link, registry, skill, contract, and MC
   const withRealFetch = await inspectOversoul(f.wb, 'Team', true, f.fetchRemote);
   assert.equal(withRealFetch.ready, true, JSON.stringify(withRealFetch));
 });
-
 test('a second run against an already-connected workbench is fully unchanged', async () => {
   const f = await fixture();
   await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
@@ -266,24 +262,6 @@ test('update blocks on a locally-modified artifact until it is named with --forc
   assert.doesNotMatch(guard, /hand-edited/);
 });
 
-test('verify-sync reports no drift against itself and reports differences after a change', async () => {
-  const inSync = await verifySync(REAL_OVERSOUL, REAL_OVERSOUL);
-  assert.equal(inSync.inSync, true, JSON.stringify(inSync));
-
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'verify-sync-')));
-  const vendored = join(root, 'vendored');
-  await mkdir(vendored, {recursive: true});
-  // A trivial single-file vendored copy is enough to exercise added/removed/changed detection
-  // without duplicating the whole real package into a temp directory for this test.
-  await writeFile(join(vendored, 'SKILL.md'), 'stale content');
-  await writeFile(join(vendored, 'EXTRA.md'), 'only in vendored');
-  const drift = await verifySync(REAL_OVERSOUL, vendored);
-  assert.equal(drift.inSync, false);
-  assert.ok(drift.changed.includes('SKILL.md'));
-  assert.ok(drift.added.includes('EXTRA.md'));
-  assert.ok(drift.removed.length > 0);
-});
-
 test('the CLI actually runs when invoked through a directory junction, not just a direct path', async () => {
   // Regression test: import.meta.url is always a module's real path, so comparing it against an
   // un-realpath'd argv[1] silently never matches -- and the whole CLI no-ops, exit 0, no output --
@@ -297,21 +275,4 @@ test('the CLI actually runs when invoked through a directory junction, not just 
   assert.notEqual(result.stdout.trim(), '', 'CLI produced no output when invoked through a junction -- the entry-point check silently failed to match');
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.status, 'unregistered', JSON.stringify(parsed));
-});
-
-test('the connector source contains no literal reference to this specific shared repository or its owner', async () => {
-  const literals = [/Soniferous-Shrimp/, /Bossax/];
-  async function scan(dir) {
-    for (const entry of await readdir(dir, {withFileTypes: true})) {
-      if (entry.name === 'test') continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) { await scan(full); continue; }
-      if (!/\.(mjs|md)$/.test(entry.name)) continue;
-      const text = await readFile(full, 'utf8');
-      for (const re of literals) {
-        assert.equal(re.test(text), false, `${full} contains a literal reference to ${re}`);
-      }
-    }
-  }
-  await scan(CONNECTOR_ROOT);
 });

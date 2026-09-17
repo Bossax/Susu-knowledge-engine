@@ -1,4 +1,4 @@
-// Pure data: every file workbench-adapters owns in a connected workbench, and the one-time
+// Pure data: every file the engine owns in a connected workbench, and the one-time
 // connection facts that are provisioned rather than kept current. Built with `buildManifest(ctx)`
 // rather than exported as static data, because several entries need the oversoul package's own
 // SKILL.md version and the rendered template text read at run time -- see connect.mjs for how
@@ -8,12 +8,12 @@ export const NOTION_URL = 'https://mcp.notion.com/mcp';
 
 export function buildArtifacts({oversoulPath, payloadDir, contractTemplateText, promptTemplatePath}) {
   return [
-    {id: 'skill:claude', kind: 'tree', clients: ['claude'], dest: '.claude/skills/oversoul', source: oversoulPath},
-    {id: 'skill:agents', kind: 'tree', clients: ['codex', 'copilot'], dest: '.agents/skills/oversoul', source: oversoulPath},
+    {id: 'skill:claude', kind: 'tree', skillId: 'oversoul', clients: ['claude'], dest: '.claude/skills/oversoul', source: oversoulPath},
+    {id: 'skill:agents', kind: 'tree', skillId: 'oversoul', clients: ['codex', 'copilot'], dest: '.agents/skills/oversoul', source: oversoulPath},
     {
       id: 'copilot-prompt', kind: 'render', clients: ['copilot'], dest: '.github/prompts/oversoul.prompt.md',
       template: promptTemplatePath,
-      substitutions: [['workbench-adapters/oversoul/SKILL.md', '.agents/skills/oversoul/SKILL.md']],
+      substitutions: [['workbench-connector/oversoul/SKILL.md', '.agents/skills/oversoul/SKILL.md']],
     },
     {
       id: 'contract', kind: 'sentinel-block', dest: 'AGENTS.md',
@@ -51,10 +51,3 @@ export function buildArtifacts({oversoulPath, payloadDir, contractTemplateText, 
     },
   ];
 }
-
-// Worktree, branch, junction, and registry entry: one-shot registration facts, not artifacts.
-// They fail by conflict, never go "stale", and three of the four live outside the workbench
-// entirely -- forcing a currency notion onto them ("is this worktree current?") would be asking a
-// question that has no answer. Reported in the same vocabulary (current/missing/blocked) without
-// being declared in buildArtifacts above.
-export const PROVISIONING_IDS = ['worktree', 'branch', 'link', 'registry'];

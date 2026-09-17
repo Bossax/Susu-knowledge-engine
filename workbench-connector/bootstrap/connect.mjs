@@ -1,27 +1,16 @@
-import {existsSync} from 'node:fs';
 import {readFile, mkdir, realpath, readdir, symlink} from 'node:fs/promises';
 import {resolve, relative, isAbsolute, sep, join, dirname, basename} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {buildArtifacts} from './manifest.mjs';
+import {pathExists, writeJsonAtomic} from '../shared/fs.mjs';
+import {probeArtifact, applyArtifact, isBlocking, needsWrite, applicable} from '../shared/artifacts/index.mjs';
+import {readState, writeState, baseFor} from '../shared/artifact-state.mjs';
 
 // Always resolve sibling files (templates/, payload/, an adjacent oversoul/) against this
 // module's own location, never process.argv[1] -- the latter is the caller's file when connect()
 // is imported as a module (as the tests do), not this file.
 const HERE = dirname(fileURLToPath(import.meta.url));
-
-// _shared sits one level up from connector/ in the development tree (workbench-adapters/_shared)
-// but directly alongside connect.mjs once vendored -- vendoring flattens connector/'s own folder
-// away while oversoul/ and _shared/ keep theirs, so connect.mjs ends up one level shallower than
-// it started relative to _shared specifically. A static relative import can't pick between the
-// two, so this resolves at load time instead, the same way resolveOversoulPath already does for
-// the oversoul package.
-const SHARED_ROOT = existsSync(join(HERE, '_shared')) ? join(HERE, '_shared') : join(HERE, '..', '_shared');
-const sharedImport = (p) => import(pathToFileURL(join(SHARED_ROOT, p)).href);
-const {pathExists, writeJsonAtomic} = await sharedImport('fs.mjs');
-const {parseVersion} = await sharedImport('skill-version.mjs');
-const {probeArtifact, applyArtifact, isBlocking, needsWrite} = await sharedImport('artifacts/index.mjs');
-const {readState, writeState, baseFor} = await sharedImport('artifact-state.mjs');
 
 // Human-invoked bootstrap tool. Deliberately not a protocol.json capability: it writes outside
 // the knowledge-base repository (into an arbitrary workbench directory), so no agent-invoked
@@ -44,16 +33,11 @@ async function resolvePrimaryRoot(repoCwd) {
   return realpath(dirname(resolve(repoCwd, commonDir)));
 }
 
-// The same connect.mjs file works unmodified from the workbench development tree (oversoul is a
-// sibling of this directory) and from a vendored release inside a shared repository (oversoul is
-// nested under this directory) -- whichever layout exists next to this file wins.
 async function resolveOversoulPath(override) {
   if (override) return override;
-  const nested = join(HERE, 'oversoul');
-  if (await pathExists(join(nested, 'SKILL.md'))) return nested;
   const sibling = join(HERE, '..', 'oversoul');
   if (await pathExists(join(sibling, 'SKILL.md'))) return sibling;
-  throw new Error('Could not locate the oversoul package next to connect.mjs (looked in ./oversoul and ../oversoul)');
+  throw new Error('Could not locate the Oversoul package at workbench-connector/oversoul');
 }
 
 const DEFAULT_CONNECT_CLIENTS = ['claude', 'codex', 'copilot'];
@@ -62,19 +46,15 @@ const DEFAULT_CONNECT_CLIENTS = ['claude', 'codex', 'copilot'];
 // hand-added Antigravity MCP entry) and now has nobody checking it.
 const DEFAULT_REPORT_CLIENTS = ['claude', 'codex', 'copilot', 'antigravity'];
 
-function applicableClients(entry, clients) {
-  if (!entry.clients) return true;
-  return entry.clients.some(c => clients.includes(c));
-}
-
 // Builds the per-workbench context every artifact handler reads: where things are, which
 // template text to render, and a bound lookup into whatever state was last recorded.
 async function buildCtx({workbenchRoot, oversoulPath, target, clients, allowDowngrade}) {
   const connectorRoot = HERE;
   const templatesDir = join(connectorRoot, 'templates');
   const payloadDir = join(connectorRoot, 'payload');
-  const skillMdText = await readFile(join(oversoulPath, 'SKILL.md'), 'utf8');
-  const skillVersion = parseVersion(skillMdText);
+  const engine = JSON.parse(await readFile(join(HERE, '..', '..', 'engine.json'), 'utf8'));
+  const engineRelease = engine.engineRelease;
+  if (!/^\d+\.\d+\.\d+$/.test(engineRelease)) throw new Error('Invalid engineRelease in engine.json');
   const contractTemplateText = await readFile(join(templatesDir, 'linked-repository.md'), 'utf8');
   const promptTemplatePath = join(oversoulPath, 'integrations', 'oversoul.prompt.md');
 
@@ -86,7 +66,7 @@ async function buildCtx({workbenchRoot, oversoulPath, target, clients, allowDown
 
   const state = await readState(workbenchRoot);
   return {
-    workbenchRoot, clients, allowDowngrade, vars, skillVersion, packageVersion: skillVersion,
+    workbenchRoot, clients, allowDowngrade, vars, packageVersion: engineRelease,
     baseFor: (id) => baseFor(state, id),
     artifacts,
   };
@@ -184,9 +164,9 @@ async function mutateProvisioning(plan, {primaryRoot, workbenchRoot, resolvedWor
 // --- the manifest walk shared by link/update ---
 
 async function planArtifacts(ctx) {
-  const applicable = ctx.artifacts.filter(e => applicableClients(e, ctx.clients));
+  const applicableArtifacts = ctx.artifacts.filter(e => applicable(e, ctx.clients));
   const probed = [];
-  for (const entry of applicable) probed.push({entry, result: await probeArtifact(ctx, entry)});
+  for (const entry of applicableArtifacts) probed.push({entry, result: await probeArtifact(ctx, entry)});
   const blocked = probed.some(({entry, result}) => isBlocking(result, entry, {allowDowngrade: ctx.allowDowngrade}) && !(ctx.force ?? []).includes(entry.id));
   return {probed, blocked};
 }
@@ -384,8 +364,6 @@ export async function verify(opts) {
   const status_ = result.status === 0 ? (artifactsCurrent ? 'ready' : 'stale') : (result.status === 2 ? 'blocked' : 'unverified');
   return {status: status_, exitCode: result.status, target: resolved.target, linkedRepo: parsed, artifacts: s};
 }
-
-export {parseVersion};
 
 // import.meta.url is always the module's real path (Node resolves a junction/symlink when
 // loading it); process.argv[1] is whatever string the caller typed, which isn't realpath'd by

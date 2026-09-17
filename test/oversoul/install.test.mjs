@@ -6,24 +6,21 @@ import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 
-const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const sharedRoot=resolve(packageRoot,'..','_shared');
+const engineRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..','..');
+const packageRoot=join(engineRoot,'workbench-connector','oversoul');
+const sharedRoot=join(engineRoot,'workbench-connector','shared');
 
 async function exists(p){try{await stat(p);return true;}catch{return false;}}
 
-// Mirror the real workbench-adapters/{oversoul,_shared} sibling layout under each temp root,
-// since install.mjs imports the shared installer via a relative '../../_shared/...' path.
 async function makeSource(root,version){
-  if(!await exists(join(root,'_shared'))) await cp(sharedRoot,join(root,'_shared'),{recursive:true});
-  const src=join(root,'source-'+version);
-  await cp(packageRoot,src,{recursive:true});
-  let skill=await readFile(join(src,'SKILL.md'),'utf8');
-  skill=skill.replace(/version:\s*\d+\.\d+\.\d+/,'version: '+version).replace(/^Version:\s*\d+\.\d+\.\d+/m,'Version: '+version);
-  await writeFile(join(src,'SKILL.md'),skill);
-  let readme=await readFile(join(src,'README.md'),'utf8');
-  readme=readme.replace(/Current version:\s*\*\*\d+\.\d+\.\d+\*\*/,'Current version: **'+version+'**');
-  await writeFile(join(src,'README.md'),readme);
-  return src;
+  const sourceRoot=join(root,'source-'+version);
+  const connectorRoot=join(sourceRoot,'workbench-connector');
+  const source=join(connectorRoot,'oversoul');
+  await mkdir(connectorRoot,{recursive:true});
+  await cp(packageRoot,source,{recursive:true});
+  await cp(sharedRoot,join(connectorRoot,'shared'),{recursive:true});
+  await writeFile(join(sourceRoot,'engine.json'),JSON.stringify({engineRelease:version,protocol:1}));
+  return source;
 }
 
 function runInstall(source,project,args){
@@ -54,17 +51,17 @@ test('fresh install, no-op reinstall, forward upgrade, and downgrade refusal',as
   r=runInstall(v2,project,['claude']);
   assert.equal(r.status,0,r.stderr);
   assert.match(r.stdout,/"action":"upgraded"/);
-  assert.match(await readFile(join(project,'.claude','skills','oversoul','SKILL.md'),'utf8'),/version:\s*0\.2\.0/);
+  assert.equal(JSON.parse(await readFile(join(project,'.claude','skills','oversoul','engine.json'),'utf8')).engineRelease,'0.2.0');
 
   r=runInstall(v1,project,['claude']);
   assert.notEqual(r.status,0);
   assert.match(r.stdout,/"action":"blocked"/);
-  assert.match(await readFile(join(project,'.claude','skills','oversoul','SKILL.md'),'utf8'),/version:\s*0\.2\.0/);
+  assert.equal(JSON.parse(await readFile(join(project,'.claude','skills','oversoul','engine.json'),'utf8')).engineRelease,'0.2.0');
 
   r=runInstall(v1,project,['claude','--allow-downgrade']);
   assert.equal(r.status,0,r.stderr);
   assert.match(r.stdout,/"action":"downgraded"/);
-  assert.match(await readFile(join(project,'.claude','skills','oversoul','SKILL.md'),'utf8'),/version:\s*0\.1\.0/);
+  assert.equal(JSON.parse(await readFile(join(project,'.claude','skills','oversoul','engine.json'),'utf8')).engineRelease,'0.1.0');
 });
 
 test('upgrade removes a file no longer present in the source package',async()=>{
