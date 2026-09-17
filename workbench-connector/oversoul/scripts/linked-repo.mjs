@@ -1,8 +1,13 @@
-import {readFile, writeFile, mkdir, rm, realpath} from 'node:fs/promises';
-import {resolve, relative, isAbsolute, sep, join} from 'node:path';
+import {readFile, writeFile, mkdir, rm, rename, cp, realpath} from 'node:fs/promises';
+import {resolve, relative, isAbsolute, sep, join, dirname} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL, fileURLToPath} from 'node:url';
 
+// This file ships standalone inside the installed skill (.claude/skills/oversoul/scripts/) --
+// shared/ is never installed alongside it, so it cannot import from there and reimplements the
+// few small pieces it needs (see compareVersions, replaceTree below), matching the git/inside/
+// isReallyDirty helpers just below which already follow this same rule.
+const DEFAULT_OWN_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000}).trim();
 const inside=(root,path)=>{const rel=relative(root,path);return rel!== '..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
 // `git status --porcelain` also flags files whose only "change" is CRLF/LF normalization noise
@@ -54,7 +59,61 @@ export async function manifest(root,expected){
   }
   return {...m,instructionPaths:instructions};
 }
-export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>git(root,'fetch','--no-tags','origin')){
+function compareVersions(a,b){
+  const pa=a.split('.').map(Number),pb=b.split('.').map(Number);
+  for(let i=0;i<3;i++) if(pa[i]!==pb[i]) return pa[i]-pb[i];
+  return 0;
+}
+async function readSkillName(dir){
+  try{
+    const skill=await readFile(join(dir,'SKILL.md'),'utf8');
+    const frontmatter=/^---\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1];
+    return /^name:\s*([a-z0-9-]+)\s*$/m.exec(frontmatter??'')?.[1]??null;
+  }catch{return null;}
+}
+// Duplicated from shared/fs.mjs's replaceTree (see the note at DEFAULT_OWN_ROOT above): stage a
+// sibling, swap it in, and on failure restore the prior installation rather than leave a half
+// swap. This is the one place this file replaces its own containing directory, so it keeps the
+// same rollback shape skill-install.mjs already uses and already has a regression test for.
+export async function replaceTree(target,staged,renamePath=rename){
+  const displaced=`${target}.old-${process.pid}-${Date.now()}`;
+  await renamePath(target,displaced);
+  try{await renamePath(staged,target);}
+  catch(error){
+    try{await renamePath(displaced,target);await rm(staged,{recursive:true,force:true});}
+    catch(restoreError){throw new AggregateError([error,restoreError],`Replacement failed; prior installation remains at ${displaced}`);}
+    throw error;
+  }
+  await rm(displaced,{recursive:true,force:true});
+}
+// Reads Shrimp's approved release and aligns the locally-installed Oversoul skill to it when
+// Shrimp is ahead. No `.shrimp/release.json` (today's real Shrimp) is a no-op, not a block --
+// this must not close the gate on a Shrimp that hasn't adopted release tracking yet. A locally
+// newer installation is never downgraded. Integrity comes from `root` already being an inspected,
+// fetched Git worktree by the time this runs; nothing here re-verifies a bundle hash.
+async function alignEngine(root,ownRoot){
+  let release;
+  try{release=JSON.parse(await readFile(join(root,'.shrimp','release.json'),'utf8'));}
+  catch{return {action:'not-tracked'};}
+  const approved=release.engineRelease;
+  const installed=JSON.parse(await readFile(join(ownRoot,'engine.json'),'utf8')).engineRelease;
+  const cmp=compareVersions(approved,installed);
+  if(cmp===0)return {action:'current',installed,approved};
+  if(cmp<0)return {action:'ahead',installed,approved};
+  const source=join(root,'.shrimp','system','connector','oversoul');
+  if(await readSkillName(source)!=='oversoul')return {action:'failed',installed,approved,reason:"Shrimp's approved connector package is missing or invalid"};
+  const staged=`${ownRoot}.tmp-${process.pid}-${Date.now()}`;
+  try{
+    await cp(source,staged,{recursive:true,errorOnExist:true,force:false});
+    await writeFile(join(staged,'engine.json'),JSON.stringify({engineRelease:approved},null,2)+'\n');
+    await replaceTree(ownRoot,staged);
+    return {action:'aligned',from:installed,to:approved};
+  }catch(error){
+    await rm(staged,{recursive:true,force:true});
+    return {action:'failed',installed,approved,reason:error.message};
+  }
+}
+export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>git(root,'fetch','--no-tags','origin'),ownRoot=DEFAULT_OWN_ROOT){
   const registry=JSON.parse(await readFile(resolve(workbench,'.linked-repos.json'),'utf8'));
   if(registry.version!==1||!registry.targets)throw new Error('Unsupported target registry');
   const names=Object.keys(registry.targets);
@@ -82,23 +141,25 @@ export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>gi
   let ahead=null,behind=null;
   if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead&&behind)diagnostics.push('Divergent branch');}
   let protocol=null;try{protocol=await manifest(root,cfg.remote);}catch(e){diagnostics.push(e.message);}
-  const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,ready:!diagnostics.length&&behind===0};
+  const engineAlignment=await alignEngine(root,ownRoot);
+  if(engineAlignment.action==='failed')diagnostics.push('Engine alignment failed: '+engineAlignment.reason);
+  const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,engineAlignment,ready:!diagnostics.length&&behind===0};
   if(state.ready) await openGate(workbench,state);
   else await closeGate(workbench,state.target);
   return state;
 }
-export async function operate(workbench,command,target,capability,args=[],fetchRemote){
+export async function operate(workbench,command,target,capability,args=[],fetchRemote,ownRoot=DEFAULT_OWN_ROOT){
   if(!['inspect','prepare','run'].includes(command))throw new Error('Use inspect, prepare, or run');
-  let state=await inspect(workbench,target,true,fetchRemote);
+  let state=await inspect(workbench,target,true,fetchRemote,ownRoot);
   if(command==='inspect'){
     if(state.ready) await openGate(workbench,state);
     else await closeGate(workbench,state.target);
     return state;
   }
   if(command==='prepare'&&!state.diagnostics.length&&state.behind>0){
-    const check=await inspect(workbench,target,false);
+    const check=await inspect(workbench,target,false,undefined,ownRoot);
     if(check.revision!==state.revision||check.diagnostics.length)throw new Error('Worktree changed during preparation');
-    git(state.root,'merge','--ff-only','@{upstream}');state=await inspect(workbench,target,false);
+    git(state.root,'merge','--ff-only','@{upstream}');state=await inspect(workbench,target,false,undefined,ownRoot);
   }
   if(!state.ready){
     await closeGate(workbench,state.target);
@@ -112,7 +173,7 @@ export async function operate(workbench,command,target,capability,args=[],fetchR
   if(!c||c.context!=='interactive')throw new Error('Capability unavailable for interactive execution');
   const optionNames=args.filter((_,i)=>i%2===0);
   if(!Array.isArray(c.options)||args.length%2||new Set(optionNames).size!==optionNames.length||args.some((v,i)=>typeof v!=='string'||(i%2===0?!c.options.includes(v):v.startsWith('--'))))throw new Error('Unsupported capability arguments');
-  const current=await inspect(workbench,target,false);
+  const current=await inspect(workbench,target,false,undefined,ownRoot);
   if(!current.ready||current.revision!==state.revision||JSON.stringify(current.protocol)!==JSON.stringify(state.protocol))throw new Error('Worktree changed before execution');
   const result=spawnSync(process.execPath,[c.entrypoint,...c.argv.slice(1),...args],{cwd:state.root,encoding:'utf8',timeout:60000,env:process.env});
   return {target:state.target,revision:state.revision,status:result.status===0?'complete':'unverified',exitCode:result.status,stdout:result.stdout,stderr:result.stderr,error:result.error?.message};

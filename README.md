@@ -10,7 +10,9 @@ Susu Knowledge Engine creates and updates shared knowledge repositories and supp
 
 ## Current baseline
 
-This baseline contains the Workbench bootstrap, shared artifact handlers, Oversoul skill, tests, candidate packaging, and the administrator-controlled Shrimp update. Release automation and gate-time engine alignment remain later work.
+This baseline contains the Workbench bootstrap, shared artifact handlers, Oversoul skill, tests, candidate packaging, the administrator-controlled Shrimp update, and gate-time engine alignment. Release automation remains later work.
+
+Opening the Oversoul gate now reads Shrimp's `.shrimp/release.json` and compares it to the locally-installed Oversoul's own `engine.json`. If Shrimp is ahead, the local skill is replaced in place from `.shrimp/system/connector/oversoul` before the gate opens. A locally newer installation is never downgraded, and a Shrimp with no `.shrimp/release.json` (not yet adopted the update above) is left exactly as before — this is a no-op, not a block.
 
 ## Commands
 
