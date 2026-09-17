@@ -7,7 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {identity,inspect as inspectReal,operate as operateReal,manifest,GATE_LEASE_FILE} from '../../workbench-connector/oversoul/scripts/linked-repo.mjs';
 const transports=new Map();
 const inspect=(wb)=>inspectReal(wb,undefined,true,transports.get(wb));
-const operate=(wb,command,target,capability)=>operateReal(wb,command,target,capability,[],transports.get(wb));
+const operate=(wb,command,target,capability,args=[])=>operateReal(wb,command,target,capability,args,transports.get(wb));
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:'pipe'}).trim();
 const exists=async(p)=>{try{await stat(p);return true;}catch{return false;}};
 async function fixture(){
@@ -34,19 +34,37 @@ test('preflight, safe fast-forward, run, dirty preservation, ahead and divergenc
   const initial=await inspect(f.wb);assert.equal(initial.ready,true,JSON.stringify(initial));
   assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   const run=await operate(f.wb,'run','Team','inventory');assert.equal(run.status,'complete');assert.equal(run.stdout.trim(),f.wt);
-  await assert.rejects(operate(f.wb,'run','Team','publish'),/unavailable/);
+  await assert.rejects(operate(f.wb,'run','Team','publish'),/not implemented by this client/);
   await writeFile(join(f.primary,'new.txt'),'remote');git(f.primary,'add','.');git(f.primary,'commit','-m','remote');git(f.primary,'push',f.remote,'main');
   assert.equal((await inspect(f.wb)).behind,1);assert.equal((await operate(f.wb,'prepare')).status,'prepared');
   assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
+  // A dirty tracked-file edit no longer closes the gate (FR-2.8/FR-10b.6): prepare still opens it,
+  // it just has nothing left to fast-forward at this point (behind is already 0).
   await writeFile(join(f.wt,'new.txt'),'local');const head=git(f.wt,'rev-parse','HEAD');
-  assert.equal((await operate(f.wb,'prepare')).status,'blocked');assert.equal(await readFile(join(f.wt,'new.txt'),'utf8'),'local');assert.equal(git(f.wt,'rev-parse','HEAD'),head);
-  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),false);
+  const dirtyPrepare=await operate(f.wb,'prepare');assert.equal(dirtyPrepare.status,'prepared',JSON.stringify(dirtyPrepare));
+  assert.match(dirtyPrepare.drift.join(),/Dirty worktree/);
+  assert.equal(await readFile(join(f.wt,'new.txt'),'utf8'),'local');assert.equal(git(f.wt,'rev-parse','HEAD'),head);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   git(f.wt,'add','.');git(f.wt,'commit','-m','local');
   const aheadOnly=await inspect(f.wb);assert.equal(aheadOnly.ready,true,JSON.stringify(aheadOnly));assert.equal(aheadOnly.ahead,1);assert.equal(aheadOnly.behind,0);
   assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
   await writeFile(join(f.primary,'remote.txt'),'other');git(f.primary,'add','.');git(f.primary,'commit','-m','other');git(f.primary,'push',f.remote,'main');
-  assert.match((await inspect(f.wb)).diagnostics.join(),/Divergent/);
-  git(f.wt,'checkout','--detach');assert.match((await inspect(f.wb)).diagnostics.join(),/Detached/);
+  const divergent=await inspect(f.wb);assert.equal(divergent.ready,true,JSON.stringify(divergent));assert.match(divergent.drift.join(),/Divergent/);
+  git(f.wt,'checkout','--detach');const detached=await inspect(f.wb);assert.equal(detached.ready,true,JSON.stringify(detached));assert.match(detached.drift.join(),/Detached/);
+});
+test('dirty worktree with real drift skips the fast-forward merge but still opens the gate',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.primary,'new.txt'),'remote');git(f.primary,'add','.');git(f.primary,'commit','-m','remote');git(f.primary,'push',f.remote,'main');
+  await inspect(f.wb); // fetches so `behind` reflects the new remote commit
+  const before=git(f.wt,'rev-parse','HEAD');
+  await writeFile(join(f.wt,'AGENTS.md'),'Genuinely different content');
+  const result=await operate(f.wb,'prepare');
+  assert.equal(result.status,'prepared',JSON.stringify(result));
+  assert.equal(result.ready,true);
+  assert.match(result.drift.join(),/Dirty worktree/);
+  assert.equal(git(f.wt,'rev-parse','HEAD'),before,'the ff-only merge must not have run');
+  assert.equal(await exists(join(f.wt,'new.txt')),false,'the remote commit must not have been merged in');
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
 });
 test('CRLF/LF renormalization noise from autocrlf is not treated as dirty',async()=>{
   const f=await fixture();
@@ -59,19 +77,21 @@ test('CRLF/LF renormalization noise from autocrlf is not treated as dirty',async
   assert.equal(result.ready,true,JSON.stringify(result));
   assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
 });
-test('a real content edit to a tracked file is still treated as dirty',async()=>{
+test('a real content edit to a tracked file is reported as drift but does not close the gate',async()=>{
   const f=await fixture();
   await writeFile(join(f.wt,'AGENTS.md'),'Genuinely different content');
   const result=await inspect(f.wb);
-  assert.equal(result.ready,false,JSON.stringify(result));
-  assert.match(result.diagnostics.join(),/Dirty worktree/);
-  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),false);
+  assert.equal(result.ready,true,JSON.stringify(result));
+  assert.match(result.drift.join(),/Dirty worktree/);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
 });
-test('missing upstream, failed fetch, wrong identity and manifest escape are blocked',async()=>{
-  const f=await fixture();git(f.wt,'branch','--unset-upstream');assert.match((await inspect(f.wb)).diagnostics.join(),/Missing upstream/);
+test('missing upstream and a failed fetch are drift, not gate-closing; wrong identity and manifest escape still are',async()=>{
+  const f=await fixture();git(f.wt,'branch','--unset-upstream');const missingUpstream=await inspect(f.wb);
+  assert.equal(missingUpstream.ready,true,JSON.stringify(missingUpstream));assert.match(missingUpstream.drift.join(),/Missing upstream/);
   git(f.wt,'branch','--set-upstream-to','origin/main');
   transports.set(f.wb,()=>{throw new Error('offline');});
-  assert.match((await inspect(f.wb)).diagnostics.join(),/Fetch failed/);
+  const fetchFailed=await inspect(f.wb);
+  assert.equal(fetchFailed.ready,true,JSON.stringify(fetchFailed));assert.match(fetchFailed.drift.join(),/Fetch failed/);
   git(f.primary,'remote','set-url','origin','https://github.com/other/team.git');await assert.rejects(inspect(f.wb),/identity mismatch/);
   const p=JSON.parse(await readFile(join(f.wt,'protocol.json'),'utf8'));p.instructions.push('../outside.md');await writeFile(join(f.wt,'protocol.json'),JSON.stringify(p));
   await assert.rejects(manifest(f.wt,'https://github.com/example/team'),/escapes/);
@@ -92,6 +112,66 @@ test('a registry path nested under a subdirectory resolves like a top-level one'
   await writeFile(join(f.wb,'.linked-repos.json'),JSON.stringify({version:1,targets:{Team:{path:'links/Team',remote:'https://github.com/example/team.git',branch:'workbench',upstream:'origin/main'}}}));
   const result=await inspect(f.wb);
   assert.equal(result.ready,true,JSON.stringify(result));
+});
+test('fetch failures are classified with the real error preserved, and never close the gate',async()=>{
+  const f=await fixture();
+  const cases=[
+    ['network',/fatal: Could not resolve host/,()=>{const e=new Error('exit 128');e.stderr='fatal: Could not resolve host: github.com\n';throw e;}],
+    ['authentication',/Authentication failed/,()=>{const e=new Error('exit 128');e.stderr='fatal: Authentication failed for https://github.com/example/team.git/\n';throw e;}],
+    ['repository',/Repository not found/,()=>{const e=new Error('exit 128');e.stderr='remote: Repository not found.\nfatal: repository not found\n';throw e;}],
+    ['unknown',/something unrecognized/,()=>{const e=new Error('exit 128');e.stderr='fatal: something unrecognized happened\n';throw e;}],
+  ];
+  for(const [category,realTextPattern,fn] of cases){
+    transports.set(f.wb,fn);
+    const result=await inspect(f.wb);
+    assert.equal(result.ready,true,`${category}: ${JSON.stringify(result)}`);
+    assert.match(result.drift.join(),new RegExp(`Fetch failed \\(${category}\\)`),category);
+    assert.match(result.drift.join(),realTextPattern,`${category}: real error text must be preserved`);
+  }
+});
+test('actions-context capabilities stay rejected even when the worktree has drifted',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'AGENTS.md'),'edited');
+  transports.set(f.wb,()=>{throw new Error('offline');});
+  await assert.rejects(operate(f.wb,'run','Team','publish'),/not implemented by this client/);
+});
+test('commit requires an explicit non-empty message and does nothing without one',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'AGENTS.md'),'edited by human review');
+  const before=git(f.wt,'rev-parse','HEAD');
+  await assert.rejects(operate(f.wb,'commit','Team',undefined,[]),/message/);
+  await assert.rejects(operate(f.wb,'commit','Team',undefined,['   ']),/message/);
+  assert.equal(git(f.wt,'rev-parse','HEAD'),before);
+});
+test('commit stages and commits the dirty tree only with an approved message',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'AGENTS.md'),'edited by human review');
+  await writeFile(join(f.wt,'scratch.txt'),'untracked file too');
+  const result=await operate(f.wb,'commit','Team',undefined,['Approved: update AGENTS.md']);
+  assert.equal(result.status,'committed',JSON.stringify(result));
+  assert.equal(git(f.wt,'log','-1','--format=%s'),'Approved: update AGENTS.md');
+  assert.equal(await readFile(join(f.wt,'scratch.txt'),'utf8'),'untracked file too');
+  assert.equal(git(f.wt,'status','--porcelain'),'');
+  const after=await inspect(f.wb);
+  assert.equal(after.ready,true);
+  assert.doesNotMatch(after.drift.join(),/Dirty worktree/);
+  assert.equal(await exists(join(f.wb,GATE_LEASE_FILE)),true);
+});
+test('commit on a clean worktree is a no-op',async()=>{
+  const f=await fixture();
+  const before=git(f.wt,'rev-parse','HEAD');
+  const result=await operate(f.wb,'commit','Team',undefined,['nothing to do']);
+  assert.equal(result.status,'clean',JSON.stringify(result));
+  assert.equal(git(f.wt,'rev-parse','HEAD'),before);
+});
+test('commit is refused (blocked, no mutation) when a hard diagnostic is present',async()=>{
+  const f=await fixture();
+  await writeFile(join(f.wt,'AGENTS.md'),'edited');
+  const before=git(f.wt,'rev-parse','HEAD');
+  const p=JSON.parse(await readFile(join(f.wt,'protocol.json'),'utf8'));p.version=99;await writeFile(join(f.wt,'protocol.json'),JSON.stringify(p));
+  const result=await operate(f.wb,'commit','Team',undefined,['message']);
+  assert.equal(result.status,'blocked',JSON.stringify(result));
+  assert.equal(git(f.wt,'rev-parse','HEAD'),before);
 });
 test('a case-differing registry path still resolves on a case-insensitive filesystem',async(t)=>{
   const probe=await mkdtemp(join(tmpdir(),'oversoul-case-'));

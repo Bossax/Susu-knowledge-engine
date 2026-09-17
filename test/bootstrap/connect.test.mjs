@@ -113,13 +113,13 @@ test('a full connect run wires worktree, link, registry, skill, contract, and MC
   // Self-verify spawns a real subprocess running the installed linked-repo.mjs, which does its
   // own real `git fetch --no-tags origin` -- it has no way to receive this test's injected
   // fetchRemote closure. Against the fixture's fake https://github.com/example/team.git that
-  // fetch genuinely fails, which is the one honest limitation of testing this hermetically; the
-  // client correctly reports it as a single non-fatal diagnostic rather than crashing, and
-  // everything else it can determine locally (branch, upstream, cleanliness, protocol) is still
-  // verified correct.
+  // fetch genuinely fails, which is the one honest limitation of testing this hermetically. A
+  // failed fetch is content drift (FR-2.8/FR-10b.6), not a gate-closing diagnostic, so this
+  // correctly reports 'ready' with the fetch failure surfaced as drift, not a hard diagnostic.
   const verifyStep = result.steps.find(s => s.step === 'self-verify');
-  assert.equal(verifyStep.action, 'blocked', JSON.stringify(verifyStep));
-  assert.deepEqual(verifyStep.detail.diagnostics, ['Fetch failed; remote state is unverified']);
+  assert.equal(verifyStep.action, 'ready', JSON.stringify(verifyStep));
+  assert.deepEqual(verifyStep.detail.diagnostics, []);
+  assert.match(verifyStep.detail.drift.join(), /Fetch failed \(repository\)/);
   assert.equal(verifyStep.detail.branch, result.branch);
   assert.equal(verifyStep.detail.upstream, 'origin/main');
   assert.equal(verifyStep.detail.changes, '');
@@ -142,9 +142,10 @@ test('a second run against an already-connected workbench is fully unchanged', a
   const second = await connect({repoCwd: f.primary, workbench: f.wb, name: 'Team', dir: 'Team', oversoulPath: REAL_OVERSOUL, fetchRemote: f.fetchRemote, yes: true});
   assert.equal(second.status, 'connected', JSON.stringify(second, null, 2));
   for (const step of second.steps) {
-    // 'blocked' here reflects the same fetch-needs-real-network limitation as the previous
-    // test, not a regression between the first and second run.
-    if (step.step === 'self-verify') { assert.equal(step.action, 'blocked'); continue; }
+    // 'ready' here reflects the same fetch-needs-real-network limitation as the previous test
+    // (the fetch failure is reported as drift, not a gate-closing diagnostic), not a regression
+    // between the first and second run.
+    if (step.step === 'self-verify') { assert.equal(step.action, 'ready'); continue; }
     assert.equal(step.action, 'unchanged', JSON.stringify(step));
   }
 
@@ -218,9 +219,13 @@ test('status and verify report a connected workbench without mutating it', async
   assert.equal(antigravity.action, 'missing', JSON.stringify(antigravity));
 
   // Same real-fetch limitation as above: verify shells out to the installed client, which does
-  // its own real fetch against the fixture's unreachable fake GitHub URL.
+  // its own real fetch against the fixture's unreachable fake GitHub URL. The fetch failure is
+  // drift, not a gate-closing diagnostic, so the gate itself reports ready; verify()'s wider
+  // default client set still finds the pre-existing missing Antigravity MCP entry (see the
+  // 'reported'/'missing' assertions above), which is what makes overall status 'stale' here.
   const v = await verify({workbench: f.wb, name: 'Team'});
-  assert.equal(v.status, 'blocked', JSON.stringify(v));
+  assert.equal(v.status, 'stale', JSON.stringify(v));
+  assert.equal(v.linkedRepo.ready, true, JSON.stringify(v));
   assert.equal(await readFile(join(f.wb, '.linked-repos.json'), 'utf8'), before);
 });
 

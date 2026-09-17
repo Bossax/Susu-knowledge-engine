@@ -18,6 +18,22 @@ function isReallyDirty(root,statusPorcelain){
   try{return !!git(root,'diff','--stat','HEAD');}
   catch{return true;}
 }
+// Classifies a failed `git fetch` from its real stderr/message so the recovery action differs by
+// cause (network vs auth vs remote vs corruption) instead of one opaque "fetch failed" string that
+// makes a sandboxed network boundary look identical to an actual Git/remote failure.
+function classifyFetchError(error){
+  const text=String(error?.stderr||error?.message||error).trim();
+  const low=text.toLowerCase();
+  if(/repository not found|does not appear to be a git repository/.test(low))
+    return {category:'repository',action:'Confirm the remote URL and that the repository still exists and you still have access.'};
+  if(/permission denied|authentication failed|could not read username|could not read password|support for password authentication was removed|\b403\b/.test(low))
+    return {category:'authentication',action:'Refresh Git credentials (SSH agent, PAT, or credential helper) and retry.'};
+  if(/could not resolve host|network is unreachable|connection timed out|connection refused|could not connect|the remote end hung up unexpectedly|ssl certificate problem/.test(low))
+    return {category:'network',action:'Check network connectivity/VPN/proxy and retry.'};
+  if(/bad object|loose object|is corrupt|object file .* is empty|not our ref/.test(low))
+    return {category:'repository-corruption',action:'Run `git fsck` in the worktree/object store; consider re-cloning if confirmed.'};
+  return {category:'unknown',action:'Re-run `git fetch` manually and report the exact output.'};
+}
 export const GATE_LEASE_FILE='.agents/oversoul-gate.json';
 export const GATE_LEASE_TTL_MS=2*60*60*1000; // 2 hours
 export async function openGate(workbench,state){
@@ -130,35 +146,43 @@ export async function inspect(workbench,target,fetch=true,fetchRemote=(root)=>gi
   if(common===own)throw new Error('Use a dedicated linked worktree, not the primary checkout');
   const remote=git(root,'remote','get-url','origin');
   if(identity(remote)!==identity(cfg.remote))throw new Error('Remote identity mismatch');
+  // `diagnostics` is hard and gate-closing: engine incompatibility, broken repository identity, an
+  // invalid worktree link, or an unverified package (FR-10b.6). `drift` is content drift -- dirty,
+  // ahead, behind, divergent, or an unfetched remote -- which may still be read, reviewed, tested,
+  // edited, and prepared for a human-approved local commit (FR-2.8); it never closes the gate.
   const diagnostics=[];
-  if(fetch){try{fetchRemote(root);}catch{diagnostics.push('Fetch failed; remote state is unverified');}}
+  const drift=[];
+  if(fetch){try{fetchRemote(root);}catch(error){
+    const{category,action}=classifyFetchError(error);
+    drift.push(`Fetch failed (${category}): ${String(error?.stderr||error?.message||error).trim()} — ${action}`);
+  }}
   const branch=git(root,'branch','--show-current');
-  if(!branch)diagnostics.push('Detached HEAD');
-  if(branch!==cfg.branch)diagnostics.push('Branch differs from registration');
-  let upstream='';try{upstream=git(root,'rev-parse','--abbrev-ref','@{upstream}');}catch{diagnostics.push('Missing upstream');}
-  if(upstream!==cfg.upstream||!upstream.startsWith('origin/'))diagnostics.push('Upstream differs from registration');
-  const changes=git(root,'status','--porcelain');if(changes&&isReallyDirty(root,changes))diagnostics.push('Dirty worktree');
+  if(!branch)drift.push('Detached HEAD');
+  if(branch!==cfg.branch)drift.push('Branch differs from registration');
+  let upstream='';try{upstream=git(root,'rev-parse','--abbrev-ref','@{upstream}');}catch{drift.push('Missing upstream');}
+  if(upstream!==cfg.upstream||!upstream.startsWith('origin/'))drift.push('Upstream differs from registration');
+  const changes=git(root,'status','--porcelain');if(changes&&isReallyDirty(root,changes))drift.push('Dirty worktree');
   let ahead=null,behind=null;
-  if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead&&behind)diagnostics.push('Divergent branch');}
+  if(upstream){[ahead,behind]=git(root,'rev-list','--left-right','--count','HEAD...@{upstream}').split(/\s+/).map(Number);if(ahead&&behind)drift.push('Divergent branch');}
   let protocol=null;try{protocol=await manifest(root,cfg.remote);}catch(e){diagnostics.push(e.message);}
   const engineAlignment=await alignEngine(root,ownRoot);
   if(engineAlignment.action==='failed')diagnostics.push('Engine alignment failed: '+engineAlignment.reason);
-  const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,protocol,engineAlignment,ready:!diagnostics.length&&behind===0};
+  const state={target,root,remote,branch,upstream,revision:git(root,'rev-parse','HEAD'),ahead,behind,changes,diagnostics,drift,protocol,engineAlignment,ready:!diagnostics.length};
   if(state.ready) await openGate(workbench,state);
   else await closeGate(workbench,state.target);
   return state;
 }
 export async function operate(workbench,command,target,capability,args=[],fetchRemote,ownRoot=DEFAULT_OWN_ROOT){
-  if(!['inspect','prepare','run'].includes(command))throw new Error('Use inspect, prepare, or run');
+  if(!['inspect','prepare','run','commit'].includes(command))throw new Error('Use inspect, prepare, run, or commit');
   let state=await inspect(workbench,target,true,fetchRemote,ownRoot);
   if(command==='inspect'){
     if(state.ready) await openGate(workbench,state);
     else await closeGate(workbench,state.target);
     return state;
   }
-  if(command==='prepare'&&!state.diagnostics.length&&state.behind>0){
+  if(command==='prepare'&&!state.diagnostics.length&&!state.drift.length&&state.behind>0){
     const check=await inspect(workbench,target,false,undefined,ownRoot);
-    if(check.revision!==state.revision||check.diagnostics.length)throw new Error('Worktree changed during preparation');
+    if(check.revision!==state.revision||check.diagnostics.length||check.drift.length)throw new Error('Worktree changed during preparation');
     git(state.root,'merge','--ff-only','@{upstream}');state=await inspect(workbench,target,false,undefined,ownRoot);
   }
   if(!state.ready){
@@ -169,8 +193,28 @@ export async function operate(workbench,command,target,capability,args=[],fetchR
     await openGate(workbench,state);
     return {...state,status:'prepared'};
   }
+  if(command==='commit'){
+    // The explicit, non-empty message argument is the approval signal (mirrors the existing
+    // Notion-mutation contract: approval immediately before the call, not persisted across calls).
+    // SKILL.md requires the agent to show the exact diff/status and get approval for that specific
+    // message before ever calling this. Stages the whole dirty tree (git add -A) -- no partial-path
+    // staging in v1; add when a real workflow needs committing only some of several dirty files.
+    if(args.length!==1||typeof args[0]!=='string'||!args[0].trim())throw new Error('Commit requires exactly one non-empty message argument');
+    if(!state.drift.some(d=>d.startsWith('Dirty worktree')))return {...state,status:'clean'};
+    const current=await inspect(workbench,target,false,undefined,ownRoot);
+    if(!current.ready||current.revision!==state.revision)throw new Error('Worktree changed before commit');
+    git(state.root,'add','-A');
+    git(state.root,'commit','-m',args[0]);
+    const after=await inspect(workbench,target,false,undefined,ownRoot);
+    await openGate(workbench,after);
+    return {...after,status:'committed'};
+  }
   const c=state.protocol.capabilities[capability];
-  if(!c||c.context!=='interactive')throw new Error('Capability unavailable for interactive execution');
+  if(!c)throw new Error('Capability unavailable for interactive execution');
+  // Deliberate placeholder guard: 'actions'-context capabilities (publish, remote mutation) have no
+  // implementation in this client. Nothing calls them today; this rejection is intentional scope,
+  // not an oversight, until a real publish workflow is designed (Phase 3+).
+  if(c.context!=='interactive')throw new Error("'actions'-context capabilities (publish, remote mutation) are not implemented by this client; they require explicit human action outside Oversoul");
   const optionNames=args.filter((_,i)=>i%2===0);
   if(!Array.isArray(c.options)||args.length%2||new Set(optionNames).size!==optionNames.length||args.some((v,i)=>typeof v!=='string'||(i%2===0?!c.options.includes(v):v.startsWith('--'))))throw new Error('Unsupported capability arguments');
   const current=await inspect(workbench,target,false,undefined,ownRoot);
