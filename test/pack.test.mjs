@@ -19,7 +19,7 @@ test('candidate package installs into a disposable project, then reinstalls as a
   const extracted=join(root,'extracted');
   await mkdir(extracted,{recursive:true});
   execFileSync('tar',['-x','-z','--force-local','-f',join(engineRoot,'dist','candidate.tar.gz'),'-C',extracted]);
-  await writeFile(join(extracted,'engine.json'),JSON.stringify({engineRelease:'0.0.0',protocol:1}));
+  assert.equal(await exists(join(extracted,'engine.json')),true,'the package must carry the release that names it');
   const source=join(extracted,'workbench-connector','oversoul');
 
   const project=join(root,'project');

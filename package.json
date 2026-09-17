@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --test",
     "check": "npm test && node workbench-connector/oversoul/scripts/validate-skill.mjs",
-    "pack": "node scripts/pack.mjs"
+    "pack": "node scripts/pack.mjs",
+    "update": "node scripts/update-shrimp.mjs"
   }
 }

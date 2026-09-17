@@ -1,10 +1,10 @@
 import {cp, mkdir, readFile, writeFile, rm, rename} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
-import {pathExists} from './fs.mjs';
+import {pathExists, replaceTree} from './fs.mjs';
 
 const RELEASE_FILE = 'engine.json';
 
-function compare(a, b) {
+export function compareRelease(a, b) {
   const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
   return 0;
@@ -36,7 +36,7 @@ export async function inspectSkill({skillId, sourceVersion, target, allowDowngra
   if (!installed) return {action: 'blocked', reason: 'Existing installation has unreadable skill or engine release metadata; move it aside before installing', failed: true};
   if (installed.name !== skillId) return {action: 'blocked', reason: `Expected skill ${skillId}, found ${installed.name}; move it aside before installing`, failed: true};
   if (installed.legacyVersion) return {action: 'migrated', from: installed.legacyVersion, to: sourceVersion};
-  const comparison = compare(sourceVersion, installed.version);
+  const comparison = compareRelease(sourceVersion, installed.version);
   if (comparison === 0) return {action: 'unchanged', version: installed.version};
   if (comparison < 0 && !allowDowngrade) return {action: 'blocked', installed: installed.version, source: sourceVersion, reason: 'Installed engine release is newer than source; pass --allow-downgrade to force', failed: true};
   return {action: comparison > 0 ? 'upgraded' : 'downgraded', from: installed.version, to: sourceVersion};
@@ -68,25 +68,11 @@ export async function installSkill({skillId, source, sourceVersion, project, pat
       results.push({action: 'installed', clients, version: sourceVersion, path: target});
       continue;
     }
-    const suffix = `${process.pid}-${Date.now()}`;
-    const staged = `${target}.${skillId}-tmp-${suffix}`;
-    const displaced = `${target}.${skillId}-old-${suffix}`;
+    const staged = `${target}.${skillId}-tmp-${process.pid}-${Date.now()}`;
     await rm(staged, {recursive: true, force: true});
     await cp(source, staged, {recursive: true, errorOnExist: true, force: false});
     await writeRelease(staged, sourceVersion);
-    await renamePath(target, displaced);
-    try {
-      await renamePath(staged, target);
-    } catch (error) {
-      try {
-        await renamePath(displaced, target);
-        await rm(staged, {recursive: true, force: true});
-      } catch (restoreError) {
-        throw new AggregateError([error, restoreError], `Replacement failed; prior installation remains at ${displaced}`);
-      }
-      throw error;
-    }
-    await rm(displaced, {recursive: true, force: true});
+    await replaceTree({target, staged, renamePath});
     results.push({...inspection, clients, path: target});
   }
 

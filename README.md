@@ -10,13 +10,19 @@ Susu Knowledge Engine creates and updates shared knowledge repositories and supp
 
 ## Current baseline
 
-This extraction baseline contains the existing Workbench bootstrap, shared artifact handlers, Oversoul skill, and tests. Packaging, release automation, Shrimp updates, and gate-time engine alignment remain later work.
+This baseline contains the Workbench bootstrap, shared artifact handlers, Oversoul skill, tests, candidate packaging, and the administrator-controlled Shrimp update. Release automation and gate-time engine alignment remain later work.
 
 ## Commands
 
 ```text
 npm test
 npm run check
+npm run pack
+npm run update -- --shrimp <dir> --package dist/candidate.tar.gz [--yes]
 ```
+
+`pack` builds a candidate package from the current commit: `dist/candidate.tar.gz` plus a `dist/manifest.json` recording the engine release, commit, and bundle hash. Rebuilding the same commit produces the same hash.
+
+`update` applies a candidate package to a Shrimp repository. It verifies the bundle hash before extracting anything, writes `.shrimp/system/connector/` and `.shrimp/release.json`, and preserves `.shrimp/project.json` and every substance folder. It reports a plan and changes nothing unless `--yes` is passed, and it never commits or pushes — the administrator reviews the diff and commits. Uncommitted changes under `.shrimp/system/` block the run until they are committed or the path is named in `--force`.
 
 Node 24.11+ and Git are required. The engine has no package dependencies.
