@@ -116,10 +116,13 @@ test('a full connect run wires worktree, link, registry, skill, contract, and MC
   // fetch genuinely fails, which is the one honest limitation of testing this hermetically. A
   // failed fetch is content drift (FR-2.8/FR-10b.6), not a gate-closing diagnostic, so this
   // correctly reports 'ready' with the fetch failure surfaced as drift, not a hard diagnostic.
+  // The exact classification (network vs repository) depends on this machine's real-time DNS/
+  // network state -- a machine that can resolve github.com gets "repository not found"; one that
+  // can't gets a network-resolution failure first. Both are honest, so only the shape is asserted.
   const verifyStep = result.steps.find(s => s.step === 'self-verify');
   assert.equal(verifyStep.action, 'ready', JSON.stringify(verifyStep));
   assert.deepEqual(verifyStep.detail.diagnostics, []);
-  assert.match(verifyStep.detail.drift.join(), /Fetch failed \(repository\)/);
+  assert.match(verifyStep.detail.drift.join(), /Fetch failed \((network|repository)\)/);
   assert.equal(verifyStep.detail.branch, result.branch);
   assert.equal(verifyStep.detail.upstream, 'origin/main');
   assert.equal(verifyStep.detail.changes, '');
