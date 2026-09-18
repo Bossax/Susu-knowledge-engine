@@ -49,7 +49,7 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   }
 
   const staging = await mkdtemp(join(tmpdir(), 'shrimp-update-'));
-  execFileSync('tar', ['-x', '-z', '--force-local', '-f', tarballPath, '-C', staging]);
+  execFileSync('tar', ['-x', '-z', '-f', tarballPath, '-C', staging]);
 
   // Release identity comes from inside the verified bytes, never from the manifest beside them.
   const engine = await readJson(join(staging, 'engine.json'));

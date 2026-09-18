@@ -18,7 +18,7 @@ test('candidate package installs into a disposable project, then reinstalls as a
   const root=await mkdtemp(join(tmpdir(),'pack-acceptance-'));
   const extracted=join(root,'extracted');
   await mkdir(extracted,{recursive:true});
-  execFileSync('tar',['-x','-z','--force-local','-f',join(engineRoot,'dist','candidate.tar.gz'),'-C',extracted]);
+  execFileSync('tar',['-x','-z','-f',join(engineRoot,'dist','candidate.tar.gz'),'-C',extracted]);
   assert.equal(await exists(join(extracted,'engine.json')),true,'the package must carry the release that names it');
   const source=join(extracted,'workbench-connector','oversoul');
 

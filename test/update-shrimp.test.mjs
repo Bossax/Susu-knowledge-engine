@@ -21,7 +21,7 @@ async function makePackage(root,{engineRelease,marker='connector payload'}){
   await writeFile(join(stage,'engine.json'),JSON.stringify({engineRelease,protocol:1},null,2)+'\n');
   await writeFile(join(stage,'workbench-connector','oversoul','SKILL.md'),`---\nname: oversoul\n---\n${marker} ${engineRelease}\n`);
   const tarball=join(dir,'candidate.tar.gz');
-  execFileSync('tar',['-c','-z','--force-local','-f',tarball,'-C',stage,'workbench-connector','engine.json']);
+  execFileSync('tar',['-c','-z','-f',tarball,'-C',stage,'workbench-connector','engine.json']);
   const bundleHash='sha256:'+createHash('sha256').update(await readFile(tarball)).digest('hex');
   await writeFile(join(dir,'manifest.json'),JSON.stringify({engineRelease,protocol:1,commit:'0'.repeat(40),bundleHash},null,2)+'\n');
   return {dir,tarball,bundleHash};
