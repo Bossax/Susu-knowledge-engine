@@ -19,6 +19,15 @@ const source = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const engine = JSON.parse(await readFile(resolve(source, '..', '..', 'engine.json'), 'utf8'));
 const sourceVersion = engine.engineRelease;
 if (!/^\d+\.\d+\.\d+$/.test(sourceVersion)) throw new Error('Invalid engineRelease in engine.json');
+let bundleHash = engine.bundleHash;
+let sourceCommit = engine.sourceCommit;
+if (!bundleHash || !sourceCommit) {
+  try {
+    const release = JSON.parse(await readFile(resolve(source, '..', '..', '..', 'release.json'), 'utf8'));
+    bundleHash = bundleHash ?? release.bundleHash;
+    sourceCommit = sourceCommit ?? release.sourceCommit;
+  } catch {}
+}
 const project = resolve(process.cwd());
 const agentsPath = join(project, 'AGENTS.md');
 if (!await pathExists(agentsPath)) {
@@ -42,6 +51,6 @@ async function afterInstall(names, source, project) {
   return [{action: already === null ? 'installed' : 'updated', clients: ['copilot'], path: promptPath}];
 }
 
-const results = await installSkill({skillId: 'oversoul', source, sourceVersion, project, pathFor, names, allowDowngrade, afterInstall});
+const results = await installSkill({skillId: 'oversoul', source, sourceVersion, bundleHash, sourceCommit, project, pathFor, names, allowDowngrade, afterInstall});
 for (const r of results) console.log(JSON.stringify(r));
 if (results.some(r => r.failed)) process.exitCode = 2;

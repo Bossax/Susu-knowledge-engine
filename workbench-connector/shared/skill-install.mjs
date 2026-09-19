@@ -17,8 +17,14 @@ async function installedIdentity(target) {
     const name = /^name:\s*([a-z0-9-]+)\s*$/m.exec(frontmatter ?? '')?.[1];
     if (!name) return null;
     try {
-      const version = JSON.parse(await readFile(join(target, RELEASE_FILE), 'utf8')).engineRelease;
-      return /^\d+\.\d+\.\d+$/.test(version) ? {name, version} : null;
+      const parsed = JSON.parse(await readFile(join(target, RELEASE_FILE), 'utf8'));
+      const version = parsed.engineRelease;
+      return /^\d+\.\d+\.\d+$/.test(version) ? {
+        name,
+        version,
+        bundleHash: parsed.bundleHash,
+        sourceCommit: parsed.sourceCommit,
+      } : null;
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
       const legacyVersion = /^\s+version:\s*(\d+\.\d+\.\d+)\s*$/m.exec(frontmatter)?.[1];
@@ -30,24 +36,40 @@ async function installedIdentity(target) {
   }
 }
 
-export async function inspectSkill({skillId, sourceVersion, target, allowDowngrade = false}) {
+export async function inspectSkill({skillId, sourceVersion, target, allowDowngrade = false, bundleHash, sourceCommit}) {
   if (!await pathExists(target)) return {action: 'installed', sourceVersion};
   const installed = await installedIdentity(target);
   if (!installed) return {action: 'blocked', reason: 'Existing installation has unreadable skill or engine release metadata; move it aside before installing', failed: true};
   if (installed.name !== skillId) return {action: 'blocked', reason: `Expected skill ${skillId}, found ${installed.name}; move it aside before installing`, failed: true};
   if (installed.legacyVersion) return {action: 'migrated', from: installed.legacyVersion, to: sourceVersion};
   const comparison = compareRelease(sourceVersion, installed.version);
-  if (comparison === 0) return {action: 'unchanged', version: installed.version};
+  if (comparison === 0) {
+    if (sourceCommit && (!installed.sourceCommit || installed.sourceCommit !== sourceCommit)) {
+      return {action: 'upgraded', from: installed.version, to: sourceVersion, sourceCommit};
+    }
+    if (bundleHash && (!installed.bundleHash || installed.bundleHash !== bundleHash)) {
+      return {action: 'upgraded', from: installed.version, to: sourceVersion, bundleHash};
+    }
+    return {action: 'unchanged', version: installed.version};
+  }
   if (comparison < 0 && !allowDowngrade) return {action: 'blocked', installed: installed.version, source: sourceVersion, reason: 'Installed engine release is newer than source; pass --allow-downgrade to force', failed: true};
   return {action: comparison > 0 ? 'upgraded' : 'downgraded', from: installed.version, to: sourceVersion};
 }
 
-async function writeRelease(target, engineRelease) {
-  await writeFile(join(target, RELEASE_FILE), JSON.stringify({engineRelease}, null, 2) + '\n');
+async function writeRelease(target, metadata) {
+  const content = typeof metadata === 'string'
+    ? {engineRelease: metadata}
+    : {
+        engineRelease: metadata.engineRelease,
+        ...(metadata.bundleHash ? {bundleHash: metadata.bundleHash} : {}),
+        ...(metadata.sourceCommit ? {sourceCommit: metadata.sourceCommit} : {}),
+      };
+  await writeFile(join(target, RELEASE_FILE), JSON.stringify(content, null, 2) + '\n');
 }
 
-export async function installSkill({skillId, source, sourceVersion, project, pathFor, names, allowDowngrade, afterInstall, renamePath = rename}) {
+export async function installSkill({skillId, source, sourceVersion, project, pathFor, names, allowDowngrade, afterInstall, renamePath = rename, bundleHash, sourceCommit}) {
   if (!/^\d+\.\d+\.\d+$/.test(sourceVersion)) throw new Error('Invalid source engine release');
+  const releaseMeta = {engineRelease: sourceVersion, bundleHash, sourceCommit};
   const byPath = new Map();
   for (const name of new Set(names)) {
     const path = pathFor(name);
@@ -56,7 +78,7 @@ export async function installSkill({skillId, source, sourceVersion, project, pat
 
   const results = [];
   for (const [target, clients] of byPath) {
-    const inspection = await inspectSkill({skillId, sourceVersion, target, allowDowngrade});
+    const inspection = await inspectSkill({skillId, sourceVersion, target, allowDowngrade, bundleHash, sourceCommit});
     if (inspection.action === 'blocked' || inspection.action === 'unchanged') {
       results.push({...inspection, clients, path: target});
       continue;
@@ -64,14 +86,14 @@ export async function installSkill({skillId, source, sourceVersion, project, pat
     if (inspection.action === 'installed') {
       await mkdir(dirname(target), {recursive: true});
       await cp(source, target, {recursive: true, errorOnExist: true, force: false});
-      await writeRelease(target, sourceVersion);
+      await writeRelease(target, releaseMeta);
       results.push({action: 'installed', clients, version: sourceVersion, path: target});
       continue;
     }
     const staged = `${target}.${skillId}-tmp-${process.pid}-${Date.now()}`;
     await rm(staged, {recursive: true, force: true});
     await cp(source, staged, {recursive: true, errorOnExist: true, force: false});
-    await writeRelease(staged, sourceVersion);
+    await writeRelease(staged, releaseMeta);
     await replaceTree({target, staged, renamePath});
     results.push({...inspection, clients, path: target});
   }

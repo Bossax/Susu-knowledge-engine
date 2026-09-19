@@ -99,7 +99,7 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
 
   const enginePath = join(shrimpRoot, ENGINE_RECORD);
   const currentEngine = await pathExists(enginePath) ? await readJson(enginePath).catch(() => null) : null;
-  steps.push({step: ENGINE_RECORD, action: !currentEngine ? 'missing' : currentEngine.engineRelease === engineRelease && currentEngine.protocol === engine.protocol ? 'unchanged' : 'stale'});
+  steps.push({step: ENGINE_RECORD, action: !currentEngine ? 'missing' : currentEngine.engineRelease === engineRelease && currentEngine.protocol === engine.protocol && currentEngine.bundleHash === bundleHash && currentEngine.sourceCommit === manifest.commit ? 'unchanged' : 'stale'});
 
   steps.push({step: RELEASE_RECORD, action: !current ? 'missing' : current.bundleHash === bundleHash ? 'unchanged' : 'stale', from: current?.engineRelease, to: engineRelease});
   // Stated in every plan, present or absent, so the preservation guarantee is visible and assertable.
@@ -122,7 +122,11 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   if (await pathExists(target)) await replaceTree({target, staged});
   else await rename(staged, target);
 
-  await writeJsonAtomic(enginePath, engine);
+  await writeJsonAtomic(enginePath, {
+    ...engine,
+    bundleHash,
+    sourceCommit: manifest.commit,
+  });
 
   if (hasLegacyTools) {
     await rm(legacyTools, {recursive: true, force: true});

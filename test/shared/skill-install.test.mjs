@@ -76,3 +76,57 @@ test('tree probe permits an explicitly allowed downgrade and rejects another ski
   assert.equal((await probe({workbenchRoot: root, packageVersion: '0.1.0', allowDowngrade: true}, entry)).state, 'ahead');
   assert.equal((await probe({workbenchRoot: root, packageVersion: '0.1.0', allowDowngrade: false}, {...entry, skillId: 'other'})).state, 'locally-modified');
 });
+
+test('skill install stamps bundleHash and sourceCommit and upgrades when stamps differ', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'skill-install-stamps-'));
+  const project = join(root, 'project');
+  const s1 = await makeSkill(root, '0.1.0');
+  const pathFor = () => join(project, '.claude', 'skills', 'demo');
+
+  let results = await installSkill({
+    skillId: 'demo',
+    source: s1,
+    sourceVersion: '0.1.0',
+    bundleHash: 'sha256:1111',
+    sourceCommit: 'commit-1',
+    project,
+    pathFor,
+    names: ['claude'],
+    allowDowngrade: false,
+  });
+  assert.equal(results[0].action, 'installed');
+  let installed = JSON.parse(await readFile(join(project, '.claude', 'skills', 'demo', 'engine.json'), 'utf8'));
+  assert.equal(installed.engineRelease, '0.1.0');
+  assert.equal(installed.bundleHash, 'sha256:1111');
+  assert.equal(installed.sourceCommit, 'commit-1');
+
+  results = await installSkill({
+    skillId: 'demo',
+    source: s1,
+    sourceVersion: '0.1.0',
+    bundleHash: 'sha256:1111',
+    sourceCommit: 'commit-1',
+    project,
+    pathFor,
+    names: ['claude'],
+    allowDowngrade: false,
+  });
+  assert.equal(results[0].action, 'unchanged');
+
+  results = await installSkill({
+    skillId: 'demo',
+    source: s1,
+    sourceVersion: '0.1.0',
+    bundleHash: 'sha256:2222',
+    sourceCommit: 'commit-2',
+    project,
+    pathFor,
+    names: ['claude'],
+    allowDowngrade: false,
+  });
+  assert.equal(results[0].action, 'upgraded');
+  installed = JSON.parse(await readFile(join(project, '.claude', 'skills', 'demo', 'engine.json'), 'utf8'));
+  assert.equal(installed.engineRelease, '0.1.0');
+  assert.equal(installed.bundleHash, 'sha256:2222');
+  assert.equal(installed.sourceCommit, 'commit-2');
+});

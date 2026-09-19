@@ -55,6 +55,15 @@ async function buildCtx({workbenchRoot, oversoulPath, target, clients, allowDown
   const engine = JSON.parse(await readFile(join(HERE, '..', '..', 'engine.json'), 'utf8'));
   const engineRelease = engine.engineRelease;
   if (!/^\d+\.\d+\.\d+$/.test(engineRelease)) throw new Error('Invalid engineRelease in engine.json');
+  let bundleHash = engine.bundleHash;
+  let sourceCommit = engine.sourceCommit;
+  if (!bundleHash || !sourceCommit) {
+    try {
+      const release = JSON.parse(await readFile(join(HERE, '..', '..', '..', 'release.json'), 'utf8'));
+      bundleHash = bundleHash ?? release.bundleHash;
+      sourceCommit = sourceCommit ?? release.sourceCommit;
+    } catch {}
+  }
   const contractTemplateText = await readFile(join(templatesDir, 'linked-repository.md'), 'utf8');
   const promptTemplatePath = join(oversoulPath, 'integrations', 'oversoul.prompt.md');
 
@@ -67,6 +76,7 @@ async function buildCtx({workbenchRoot, oversoulPath, target, clients, allowDown
   const state = await readState(workbenchRoot);
   return {
     workbenchRoot, clients, allowDowngrade, vars, packageVersion: engineRelease,
+    bundleHash, sourceCommit,
     baseFor: (id) => baseFor(state, id),
     artifacts,
   };

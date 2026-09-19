@@ -30,8 +30,9 @@ async function makePackage(root,{engineRelease,marker='connector payload'}){
   const tarball=join(dir,'candidate.tar.gz');
   execFileSync('tar',['-c','-z','-f',tarball,'-C',stage,'workbench-connector','engine.json']);
   const bundleHash='sha256:'+createHash('sha256').update(await readFile(tarball)).digest('hex');
-  await writeFile(join(dir,'manifest.json'),JSON.stringify({engineRelease,protocol:1,commit:'0'.repeat(40),bundleHash},null,2)+'\n');
-  return {dir,tarball,bundleHash};
+  const commit='0'.repeat(40);
+  await writeFile(join(dir,'manifest.json'),JSON.stringify({engineRelease,protocol:1,commit,bundleHash},null,2)+'\n');
+  return {dir,tarball,bundleHash,commit};
 }
 
 async function makeShrimp(root,{substance=false}={}){
@@ -145,6 +146,8 @@ test('an apply lands every sub-package and the engine record beside them',async(
   const engine=JSON.parse(await readFile(engineRecord,'utf8'));
   assert.equal(engine.engineRelease,'0.1.0');
   assert.equal(engine.protocol,1);
+  assert.equal(engine.bundleHash,pkg.bundleHash);
+  assert.equal(engine.sourceCommit,pkg.commit);
 
   // Re-applying the same package reports it as already current rather than always rewriting.
   git(shrimp,'add','-A');
