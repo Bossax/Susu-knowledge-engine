@@ -7,6 +7,7 @@
     "check": "npm test && node workbench-connector/oversoul/scripts/validate-skill.mjs",
     "pack": "node scripts/pack.mjs",
     "update": "node scripts/update-shrimp.mjs",
+    "init": "node scripts/init-shrimp.mjs",
     "build:sync": "node scripts/build-sync.mjs",
     "test:sync": "node --test sync/test/*.test.ts"
   },
