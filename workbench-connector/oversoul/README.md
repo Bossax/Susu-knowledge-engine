@@ -45,15 +45,16 @@ node <skill>/scripts/linked-repo.mjs prepare --target Shrimp
 node <skill>/scripts/linked-repo.mjs run --target Shrimp --capability inventory
 ```
 
-Inspect returns repository evidence even when dirty or offline, and opens the session gate lease
-(`.agents/oversoul-gate.json`) when the target is clean and synchronized. Prepare fast-forwards only a
-clean behind branch and opens the session gate lease. Run repeats preflight and refuses dirty, ahead,
-divergent or unverified state. Exit 0 is success, 2 is blocked/unverified operation, and 1 is an invalid
-request or preflight exception. Reports do not imply an agent has already read the returned documents.
+Inspect returns repository evidence even when dirty or offline, and completes the gate-opening
+handshake (recorded in `.agents/oversoul-gate.json`) when the target is clean and synchronized.
+Prepare fast-forwards only a clean behind branch and completes the same gate-opening handshake. Run
+repeats preflight and refuses dirty, ahead, divergent or unverified state. Exit 0 is success, 2 is
+blocked/unverified operation, and 1 is an invalid request or preflight exception. Reports do not
+imply an agent has already read the returned documents.
 The run command accepts capability-declared option/value pairs after `--`; repository-root,
 configuration, executable and arbitrary shell overrides are not accepted.
-Direct read and write access to the linked repository is blocked until `inspect` or `prepare` opens
-the session gate lease.
+Direct read and write access to the linked repository is blocked until `inspect` or `prepare`
+completes the gate-opening handshake.
 
 Tests: `npm test`. Tests use temporary local Git repositories and directories
 and inject only the fetch transport; they do not contact GitHub, npm, or mutate the real

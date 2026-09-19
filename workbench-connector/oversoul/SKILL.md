@@ -12,9 +12,9 @@ If registration is missing, explain the required registration; do not guess a re
 
 ## Conversational Invocations
 
-- `/shrimp:oversoul`: Checks repository status. Run `inspect` silently and output the status. Then, read `.shrimp/system/protocol.json` and present the available interactive capabilities to the user as a Markdown table with one-line descriptions so they can discover what actions are possible.
+- `/shrimp:oversoul`: Checks repository status. Run `inspect` silently and output the status. Then, read `.shrimp/system/protocol.json` and present the available actions to the user as a Markdown table with one-line descriptions.
 - `/shrimp:oversoul-sync`: Fast-forwards upstream changes when clean and opens access.
-- `/shrimp:oversoul-run <capability>`: Executes a specific capability from the repository.
+- `/shrimp:oversoul-run <capability>`: Executes a specific action from the repository, using the capability name shown in the discovery table.
 - `/shrimp:oversoul-save <message>`: Prepares a human-approved local commit of existing dirty content.
 - `/shrimp:oversoul-target <NAME>`: Selects a specific registered target when multiple exist.
 - `/shrimp:oversoul-status`: Reports the workbench's own files' currency. Literal invocation only.
@@ -27,8 +27,8 @@ Every operation must state its outcome to the user: observed, proposed, recorded
 1. **check status** (`node <skill>/scripts/linked-repo.mjs inspect [--target NAME]`):
    Prints a JSON result. Use this to determine if the repository is ready for interaction.
    Do not treat a non-empty `changes` field as dirty. The script already checks for real changes. If `ready` is true, access is open. If `ready` is false, access is closed. Read the output to explain why. Always report the status from the actual command output you just ran.
-   A separate `drift` field reports content drift (dirty, ahead, behind, divergent branch, detached HEAD, or a failed fetch) that may still be read, reviewed, tested, edited, and prepared for a human-approved local commit. A non-empty `drift` never closes access. Report `drift` to the user as informational context.
-   An `engineAlignment` field reports whether the installed connector matches the approved release.
+   Content drift — dirty, ahead, behind, a divergent branch, detached HEAD, or a failed fetch — is reported separately in a `drift` field and may still be read, reviewed, tested, edited, and prepared for a human-approved local commit. A non-empty `drift` never closes access. Report `drift` to the user as informational context.
+   Whether the installed connector matches the approved release is reported in an `engineAlignment` field.
    **Outcome:** observed.
 
 2. **sync** (`node <skill>/scripts/linked-repo.mjs prepare [--target NAME]`):

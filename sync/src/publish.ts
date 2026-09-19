@@ -37,10 +37,11 @@ async function upsert(api:Notion, source:string,id:string,properties:Record<stri
   if(matches.length) return api.request("pages/"+matches[0].id,"PATCH",{properties});
   return api.request("pages","POST",{parent:{type:"data_source_id",data_source_id:source},properties});
 }
-async function syncBody(api:Notion, pageId:string, body:string|undefined) {
-  if(!body) return;
-  const {blocks}=markdownToBlocks(body);
+async function syncBody(api:Notion, pageId:string, body:string|undefined): Promise<boolean> {
+  if(!body) return false;
+  const {blocks,truncated}=markdownToBlocks(body);
   await api.replacePageBody(pageId,blocks);
+  return truncated;
 }
 export async function publish(api:Notion, config:Config, data:Inventory, ref:string) {
   const report:{published:string[];skipped:string[];errors:string[];warnings:string[]}={published:[],skipped:[],errors:[],warnings:[...data.warnings]};
@@ -56,7 +57,7 @@ export async function publish(api:Notion, config:Config, data:Inventory, ref:str
         props.Duration = {date:{start:t.createdOn,end:addDaysToDate(t.createdOn,5)}};
       }
       const page=await upsert(api,config.notion.threads,t.id,props);
-      await syncBody(api,page.id,t.body);
+      if(await syncBody(api,page.id,t.body)) report.warnings.push(t.id+": body exceeded 300 Notion blocks and was truncated");
       report.published.push(t.id);
     }catch(e){report.errors.push(t.id+": "+(e as Error).message);}
   }
@@ -64,7 +65,7 @@ export async function publish(api:Notion, config:Config, data:Inventory, ref:str
     try{
       const page=await upsert(api,config.notion.activity,a.id,{ID:rich(a.id),Name:title(a.title),Kind:{select:{name:a.kind}},
         URL:{url:repoUrl(config,a.path)},Revision:rich(ref)});
-      await syncBody(api,page.id,a.body);
+      if(await syncBody(api,page.id,a.body)) report.warnings.push(a.id+": body exceeded 300 Notion blocks and was truncated");
       report.published.push(a.id);
     }catch(e){report.errors.push(a.id+": "+(e as Error).message);}
   }

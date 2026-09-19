@@ -15,14 +15,15 @@ the workbench root. Its machine-local registry is `{{REGISTRY}}`.
 
 1. **Inspect**: `node <skill>/scripts/linked-repo.mjs inspect --target {{TARGET}}` (or `/oversoul inspect` / `/oversoul`)
    Checks synchronization, remote status (ahead/behind), and local changes, and returns a `ready`
-   field (true or false) that is the sole authority on whether the session gate opened — read that
-   field from the command's own output, don't re-derive it. A non-empty raw `changes` line is not
-   by itself proof of anything: it can be line-ending noise with no real content difference, which
-   the command already accounts for. `ready: true` means the gate (`.agents/oversoul-gate.json`) is
-   open for the active session; `ready: false` means it was revoked, with `diagnostics` saying why.
+   field (true or false) that is the sole authority on whether the gate-opening handshake completed
+   — read that field from the command's own output, don't re-derive it. A non-empty raw `changes`
+   line is not by itself proof of anything: it can be line-ending noise with no real content
+   difference, which the command already accounts for. `ready: true` means the gate-opening
+   handshake (recorded in `.agents/oversoul-gate.json`) is open for the active session; `ready:
+   false` means it was revoked, with `diagnostics` saying why.
 2. **Prepare**: `node <skill>/scripts/linked-repo.mjs prepare --target {{TARGET}}` (or `/oversoul prepare`)
-   Safely fast-forwards the worktree if it is strictly behind upstream and opens the session gate
-   lease on success, reported the same way via `ready`.
+   Safely fast-forwards the worktree if it is strictly behind upstream and completes the
+   gate-opening handshake on success, reported the same way via `ready`.
 3. **Run**: `node <skill>/scripts/linked-repo.mjs run --target {{TARGET}} --capability <NAME> [-- <args>]`
    Executes interactive capabilities advertised in the target's `protocol.json`.
 

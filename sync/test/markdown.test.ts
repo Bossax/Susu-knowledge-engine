@@ -48,3 +48,26 @@ test("publish mirrors thread and artifact body into page blocks and resyncs prio
   assert(calls.some(c => c.method === "DELETE" && c.path === "blocks/old-block"));
   assert(calls.some(c => c.method === "PATCH" && c.path === "blocks/new-page/children"));
 });
+
+test("publish reports a warning when a body is truncated, not just the in-page notice", async () => {
+  const config: Config = {repository:"example/team", branch:"main", notion:{version:"v", threads:"threads", tasks:"tasks", activity:"activity", dashboardBlock:"block"}};
+  const api = new Notion("test", "v", async (url, init) => {
+    const path = new URL(String(url)).pathname.replace("/v1/", "");
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/query")) return Response.json({results: [], has_more: false});
+    if (method === "POST" && path === "pages") return Response.json({id: "new-page", properties: {}});
+    if (path.startsWith("blocks/") && path.endsWith("/children") && method === "GET")
+      return Response.json({results: [], has_more: false});
+    if (method === "DELETE") return Response.json({});
+    if (method === "PATCH") return Response.json({});
+    return Response.json({});
+  });
+  const longBody = Array.from({length: 400}, (_, i) => "- item " + i).join("\n");
+  const data: Inventory = {
+    threads: [{id:"THREAD-b", title:"Beta", status:"active", path:"work/b/README.md", tags:[], body:longBody}],
+    artifacts: [], events: [], warnings: []
+  };
+  const result = await publish(api, config, data, "abc");
+  assert.deepEqual(result.errors, []);
+  assert(result.warnings.some(w => w.startsWith("THREAD-b:") && w.includes("truncated")));
+});
