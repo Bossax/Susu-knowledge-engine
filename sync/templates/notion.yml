@@ -1,0 +1,31 @@
+name: Notion publishing
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: notion-publishing
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: vars.NOTION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - name: Publish records and explicit task events
+        if: github.event_name != 'schedule'
+        env:
+          NOTION_WRITE_TOKEN: ${{ secrets.NOTION_WRITE_TOKEN }}
+        run: node .shrimp/system/sync/cli.mjs publish --config .shrimp/project.json
+      - name: Refresh dashboard
+        if: always()
+        env:
+          NOTION_WRITE_TOKEN: ${{ secrets.NOTION_WRITE_TOKEN }}
+        run: node .shrimp/system/sync/cli.mjs dashboard --config .shrimp/project.json

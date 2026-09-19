@@ -6,7 +6,7 @@ const commit = execFileSync('git', ['rev-parse', 'HEAD']).toString().trim();
 // engine.json rides inside the archive so the package names its own release: an administrator
 // applying a downloaded package has no engine checkout to read it from.
 const tarball = execFileSync('git', [
-  'archive', '--format=tar.gz', commit, '--', 'workbench-connector', 'engine.json',
+  'archive', '--format=tar.gz', commit, '--', 'workbench-connector', 'sync', 'engine.json',
 ]);
 const bundleHash = `sha256:${createHash('sha256').update(tarball).digest('hex')}`;
 const { engineRelease, protocol } = JSON.parse(readFileSync('engine.json', 'utf8'));

@@ -9,6 +9,7 @@ import {compareRelease} from '../workbench-connector/shared/skill-install.mjs';
 
 const SYSTEM_DIR = '.shrimp/system';
 const CONNECTOR_DEST = '.shrimp/system/connector';
+const SYNC_DEST = '.shrimp/system/sync';
 // Both `bootstrap/connect.mjs` and `oversoul/scripts/install.mjs` read `../../engine.json` relative
 // to their own package directory, which lands here once vendored. Without it they fail with ENOENT
 // against a Shrimp checkout, so the release is copied in beside the connector it describes.
@@ -97,6 +98,15 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
     steps.push({step: CONNECTOR_DEST, action: !connectorPresent ? 'missing' : connectorCurrent ? 'unchanged' : 'stale'});
   }
 
+  const syncSource = join(staging, 'sync');
+  const hasSyncSource = await pathExists(syncSource);
+  const syncTarget = join(shrimpRoot, SYNC_DEST);
+  if (hasSyncSource) {
+    const syncPresent = await pathExists(syncTarget);
+    const syncCurrent = syncPresent && current?.bundleHash === bundleHash && !dirty;
+    steps.push({step: SYNC_DEST, action: !syncPresent ? 'missing' : syncCurrent ? 'unchanged' : 'stale'});
+  }
+
   const enginePath = join(shrimpRoot, ENGINE_RECORD);
   const currentEngine = await pathExists(enginePath) ? await readJson(enginePath).catch(() => null) : null;
   steps.push({step: ENGINE_RECORD, action: !currentEngine ? 'missing' : currentEngine.engineRelease === engineRelease && currentEngine.protocol === engine.protocol && currentEngine.bundleHash === bundleHash && currentEngine.sourceCommit === manifest.commit ? 'unchanged' : 'stale'});
@@ -121,6 +131,14 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   await cp(source, staged, {recursive: true, errorOnExist: true, force: false});
   if (await pathExists(target)) await replaceTree({target, staged});
   else await rename(staged, target);
+
+  if (hasSyncSource) {
+    const stagedSync = `${syncTarget}.tmp-${process.pid}-${Date.now()}`;
+    await rm(stagedSync, {recursive: true, force: true});
+    await cp(syncSource, stagedSync, {recursive: true, errorOnExist: true, force: false});
+    if (await pathExists(syncTarget)) await replaceTree({target: syncTarget, staged: stagedSync});
+    else await rename(stagedSync, syncTarget);
+  }
 
   await writeJsonAtomic(enginePath, {
     ...engine,
