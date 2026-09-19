@@ -20,6 +20,7 @@ test('candidate package installs into a disposable project, then reinstalls as a
   await mkdir(extracted,{recursive:true});
   execFileSync('tar',['-x','-z','-f',join(engineRoot,'dist','candidate.tar.gz'),'-C',extracted]);
   assert.equal(await exists(join(extracted,'engine.json')),true,'the package must carry the release that names it');
+  assert.equal(await exists(join(extracted,'sync','cli.mjs')),true,'the package must carry sync cli');
   const source=join(extracted,'workbench-connector','oversoul');
 
   const project=join(root,'project');

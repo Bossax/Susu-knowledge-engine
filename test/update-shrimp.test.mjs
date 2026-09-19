@@ -14,7 +14,7 @@ async function exists(p){try{await stat(p);return true;}catch{return false;}}
 
 // Builds a candidate package without going through pack.mjs, so these tests do not depend on the
 // engine's real HEAD and can mint any release number they need.
-async function makePackage(root,{engineRelease,marker='connector payload'}){
+async function makePackage(root,{engineRelease,marker='connector payload',withSync=false}){
   const dir=join(root,'package-'+engineRelease);
   const stage=join(dir,'stage');
   await mkdir(join(stage,'workbench-connector','oversoul'),{recursive:true});
@@ -27,8 +27,14 @@ async function makePackage(root,{engineRelease,marker='connector payload'}){
   await writeFile(join(stage,'workbench-connector','shared','fs.mjs'),`// shared ${engineRelease}\n`);
   await writeFile(join(stage,'engine.json'),JSON.stringify({engineRelease,protocol:1},null,2)+'\n');
   await writeFile(join(stage,'workbench-connector','oversoul','SKILL.md'),`---\nname: oversoul\n---\n${marker} ${engineRelease}\n`);
+  const archivePaths=['workbench-connector','engine.json'];
+  if(withSync){
+    await mkdir(join(stage,'sync'),{recursive:true});
+    await writeFile(join(stage,'sync','cli.mjs'),`// sync cli ${engineRelease}\n`);
+    archivePaths.push('sync');
+  }
   const tarball=join(dir,'candidate.tar.gz');
-  execFileSync('tar',['-c','-z','-f',tarball,'-C',stage,'workbench-connector','engine.json']);
+  execFileSync('tar',['-c','-z','-f',tarball,'-C',stage,...archivePaths]);
   const bundleHash='sha256:'+createHash('sha256').update(await readFile(tarball)).digest('hex');
   const commit='0'.repeat(40);
   await writeFile(join(dir,'manifest.json'),JSON.stringify({engineRelease,protocol:1,commit,bundleHash},null,2)+'\n');
@@ -231,4 +237,25 @@ test('legacy tools/connect is retired and cleaned up during update',async()=>{
   assert.equal(await exists(legacy),false);
   assert.equal(await exists(join(shrimp,'tools')),false);
 });
+
+test('an apply lands sync runtime into .shrimp/system/sync beside connector',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'shrimp-update-test-'));
+  const shrimp=await makeShrimp(root);
+  const pkg=await makePackage(root,{engineRelease:'0.1.0',withSync:true});
+
+  let r=run(shrimp,pkg);
+  assert.equal(step(parse(r),'.shrimp/system/sync').action,'missing');
+  assert.equal(await exists(join(shrimp,'.shrimp','system','sync','cli.mjs')),false);
+
+  r=run(shrimp,pkg,'--yes');
+  assert.equal(r.status,0,r.stdout);
+  assert.equal(parse(r).status,'complete');
+  assert.equal(await exists(join(shrimp,'.shrimp','system','sync','cli.mjs')),true);
+
+  git(shrimp,'add','-A');
+  git(shrimp,'commit','-q','-m','adopt 0.1.0');
+  r=run(shrimp,pkg);
+  assert.equal(step(parse(r),'.shrimp/system/sync').action,'unchanged');
+});
+
 
