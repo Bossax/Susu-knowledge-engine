@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,symlink,realpath,stat} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,symlink,realpath,stat,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -112,6 +112,16 @@ test('a registry path nested under a subdirectory resolves like a top-level one'
   await writeFile(join(f.wb,'.linked-repos.json'),JSON.stringify({version:1,targets:{Team:{path:'links/Team',remote:'https://github.com/example/team.git',branch:'workbench',upstream:'origin/main'}}}));
   const result=await inspect(f.wb);
   assert.equal(result.ready,true,JSON.stringify(result));
+});
+test('manifest() reads .shrimp/system/protocol.json when present',async()=>{
+  const f=await fixture();
+  const raw=await readFile(join(f.wt,'protocol.json'),'utf8');
+  await rm(join(f.wt,'protocol.json'));
+  await mkdir(join(f.wt,'.shrimp','system'),{recursive:true});
+  await writeFile(join(f.wt,'.shrimp','system','protocol.json'),raw,'utf8');
+  const m=await manifest(f.wt,'https://github.com/example/team');
+  assert.equal(m.repository,'example/team');
+  assert.equal(Array.isArray(m.instructionPaths),true);
 });
 test('fetch failures are classified with the real error preserved, and never close the gate',async()=>{
   const f=await fixture();

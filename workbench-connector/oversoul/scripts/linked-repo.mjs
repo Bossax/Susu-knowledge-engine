@@ -60,8 +60,13 @@ async function document(root,path){
   if(!inside(root,physical))throw new Error('Protocol symlink escapes repository');
   await readFile(physical);return physical;
 }
+async function resolveProtocol(root){
+  const systemPath=join('.shrimp','system','protocol.json');
+  try{return await document(root,systemPath);}catch{}
+  return await document(root,'protocol.json');
+}
 export async function manifest(root,expected){
-  const m=JSON.parse(await readFile(await document(root,'protocol.json'),'utf8'));
+  const m=JSON.parse(await readFile(await resolveProtocol(root),'utf8'));
   if(m.version!==1)throw new Error('Unsupported protocol manifest version; update Oversoul');
   if(m.repository.toLowerCase()!==identity(expected))throw new Error('Protocol repository identity mismatch');
   if(m.runtime?.nodeMajor!==24||m.runtime?.nodeMinMinor!==11)throw new Error('Unsupported protocol runtime requirement');
