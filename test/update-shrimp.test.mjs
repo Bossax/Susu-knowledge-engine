@@ -167,3 +167,23 @@ test('an older engine release is refused unless the downgrade is explicitly allo
   assert.equal(r.status,0,r.stdout);
   assert.equal(JSON.parse(await readFile(recordPath,'utf8')).engineRelease,'0.1.0');
 });
+
+test('legacy tools/connect is retired and cleaned up during update',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'shrimp-update-test-'));
+  const shrimp=await makeShrimp(root);
+  const legacy=join(shrimp,'tools','connect');
+  await mkdir(legacy,{recursive:true});
+  await writeFile(join(legacy,'old.mjs'),'legacy code\n');
+  git(shrimp,'add','-A');
+  git(shrimp,'commit','-q','-m','add legacy connector');
+
+  const pkg=await makePackage(root,{engineRelease:'0.1.0'});
+  const plan=parse(run(shrimp,pkg));
+  assert.equal(step(plan,'tools/connect').action,'retired');
+
+  const r=run(shrimp,pkg,'--yes');
+  assert.equal(r.status,0,r.stdout);
+  assert.equal(await exists(legacy),false);
+  assert.equal(await exists(join(shrimp,'tools')),false);
+});
+

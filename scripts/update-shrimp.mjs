@@ -1,4 +1,4 @@
-import {cp, mkdir, mkdtemp, readFile, rename, rm} from 'node:fs/promises';
+import {cp, mkdir, mkdtemp, readFile, readdir, rename, rm} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
@@ -96,6 +96,12 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   // Stated in every plan, present or absent, so the preservation guarantee is visible and assertable.
   steps.push({step: PROJECT_CONFIG, action: 'preserved'});
 
+  const legacyTools = join(shrimpRoot, 'tools', 'connect');
+  const hasLegacyTools = await pathExists(legacyTools);
+  if (hasLegacyTools) {
+    steps.push({step: 'tools/connect', action: 'retired', reason: 'Replaced by .shrimp/system/connector'});
+  }
+
   const summary = {shrimp: shrimpRoot, engineRelease, protocol: engine.protocol, sourceCommit: manifest.commit, bundleHash, steps};
   if (!yes) return {status: 'planned', ...summary};
   if (blocked) return {status: 'blocked', ...summary};
@@ -106,6 +112,16 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   await cp(source, staged, {recursive: true, errorOnExist: true, force: false});
   if (await pathExists(target)) await replaceTree({target, staged});
   else await rename(staged, target);
+
+  if (hasLegacyTools) {
+    await rm(legacyTools, {recursive: true, force: true});
+    try {
+      const toolsDir = join(shrimpRoot, 'tools');
+      const remaining = await readdir(toolsDir);
+      if (remaining.length === 0) await rm(toolsDir, {recursive: true, force: true});
+    } catch {}
+  }
+
   // The receipt lands last: a crash before it leaves release.json naming the previous release, so
   // re-running simply re-applies rather than needing a repair path.
   await writeJsonAtomic(recordPath, record);
