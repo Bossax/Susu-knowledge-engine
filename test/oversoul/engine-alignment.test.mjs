@@ -96,6 +96,47 @@ test('a matching engineRelease string with a different bundle hash is a mismatch
   assert.equal(second.ready,false,JSON.stringify(second));
 });
 
+// Regression: engineRelease stays pinned at one value across development, so comparing it alone
+// made the copy path unreachable and every rebuild silently failed to reach connected workbenches.
+test('a matching engineRelease string with a different source commit re-aligns',async()=>{
+  const f=await fixture('0.1.0');
+  await adoptRelease(f.wt,'0.2.0');
+  const first=await f.inspect();
+  assert.equal(first.engineAlignment.action,'aligned');
+  assert.equal(JSON.parse(await readFile(join(f.own,'engine.json'),'utf8')).sourceCommit,'0'.repeat(40),'the aligned source commit is stamped locally so a later check can compare it');
+
+  // Shrimp adopts a rebuild: same engineRelease, new commit and new bytes. Both stamps differ, and
+  // a differing sourceCommit means a legitimate rebuild, so this must re-align rather than fail.
+  const release=JSON.parse(await readFile(join(f.wt,'.shrimp','release.json'),'utf8'));
+  release.sourceCommit='a'.repeat(40);
+  release.bundleHash='sha256:'+'1'.repeat(64);
+  await writeFile(join(f.wt,'.shrimp','release.json'),JSON.stringify(release,null,2)+'\n');
+  await writeFile(join(f.wt,'.shrimp','system','connector','oversoul','SKILL.md'),'---\nname: oversoul\n---\nconnector payload rebuilt\n');
+  git(f.wt,'add','.shrimp');git(f.wt,'commit','-q','-m','rebuild at same release');
+
+  const second=await f.inspect();
+  assert.equal(second.engineAlignment.action,'aligned');
+  assert.equal(second.engineAlignment.to,'0.2.0');
+  assert.equal(second.ready,true,JSON.stringify(second));
+  assert.match(await readFile(join(f.own,'SKILL.md'),'utf8'),/connector payload rebuilt/,'the rebuilt payload actually replaced the installed copy');
+  const stamped=JSON.parse(await readFile(join(f.own,'engine.json'),'utf8'));
+  assert.equal(stamped.sourceCommit,'a'.repeat(40));
+  assert.equal(stamped.bundleHash,'sha256:'+'1'.repeat(64));
+
+  const again=await f.inspect();
+  assert.equal(again.engineAlignment.action,'current','a second check settles rather than re-aligning every time');
+});
+
+test('an unstamped install is left unverified rather than flagged',async()=>{
+  const f=await fixture('0.1.0');
+  await adoptRelease(f.wt,'0.1.0');
+  // A plain dev-checkout install has neither stamp, so there is nothing to compare on and no
+  // honest claim to make -- it must not be reported as a mismatch.
+  const result=await f.inspect();
+  assert.equal(result.engineAlignment.action,'current');
+  assert.equal(result.ready,true,JSON.stringify(result));
+});
+
 test('a locally newer installation is never downgraded',async()=>{
   const f=await fixture('0.2.0');
   await writeFile(join(f.own,'CURRENT.md'),'the newer local copy');

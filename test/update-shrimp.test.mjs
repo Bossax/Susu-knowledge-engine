@@ -18,6 +18,13 @@ async function makePackage(root,{engineRelease,marker='connector payload'}){
   const dir=join(root,'package-'+engineRelease);
   const stage=join(dir,'stage');
   await mkdir(join(stage,'workbench-connector','oversoul'),{recursive:true});
+  // The real package carries all three sibling sub-packages, and bootstrap/ resolves both its
+  // oversoul sibling and `../../engine.json` by relative path once vendored -- so the fixture
+  // mirrors that shape rather than oversoul alone, which would not catch a payload that drops them.
+  await mkdir(join(stage,'workbench-connector','bootstrap'),{recursive:true});
+  await mkdir(join(stage,'workbench-connector','shared'),{recursive:true});
+  await writeFile(join(stage,'workbench-connector','bootstrap','connect.mjs'),`// bootstrap ${engineRelease}\n`);
+  await writeFile(join(stage,'workbench-connector','shared','fs.mjs'),`// shared ${engineRelease}\n`);
   await writeFile(join(stage,'engine.json'),JSON.stringify({engineRelease,protocol:1},null,2)+'\n');
   await writeFile(join(stage,'workbench-connector','oversoul','SKILL.md'),`---\nname: oversoul\n---\n${marker} ${engineRelease}\n`);
   const tarball=join(dir,'candidate.tar.gz');
@@ -109,6 +116,41 @@ test('a fresh shrimp and an already-connected shrimp take the same apply path',a
   // The tool mutates the working tree and leaves committing to the human.
   assert.equal(git(shrimp,'rev-list','--count','HEAD'),String(Number(commitsBefore)+1));
   assert.notEqual(git(shrimp,'status','--porcelain'),'');
+});
+
+// Regression: the connector reached Shrimp but `engine.json` did not, so both
+// `bootstrap/connect.mjs` and `oversoul/scripts/install.mjs` -- which read `../../engine.json`
+// relative to their own package directory -- failed with ENOENT against a real Shrimp checkout.
+test('an apply lands every sub-package and the engine record beside them',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'shrimp-update-test-'));
+  const shrimp=await makeShrimp(root);
+  const pkg=await makePackage(root,{engineRelease:'0.1.0'});
+
+  let r=run(shrimp,pkg);
+  assert.equal(step(parse(r),'.shrimp/system/engine.json').action,'missing');
+  assert.equal(await exists(join(shrimp,'.shrimp','system','engine.json')),false);
+
+  r=run(shrimp,pkg,'--yes');
+  assert.equal(r.status,0,r.stdout);
+  assert.equal(parse(r).status,'complete');
+
+  const connector=join(shrimp,'.shrimp','system','connector');
+  for(const p of [['oversoul','SKILL.md'],['bootstrap','connect.mjs'],['shared','fs.mjs']]){
+    assert.equal(await exists(join(connector,...p)),true,`missing ${p.join('/')}`);
+  }
+
+  // `../../engine.json` from either package directory has to resolve to this exact path.
+  const engineRecord=join(connector,'oversoul','..','..','engine.json');
+  assert.equal(await exists(engineRecord),true);
+  const engine=JSON.parse(await readFile(engineRecord,'utf8'));
+  assert.equal(engine.engineRelease,'0.1.0');
+  assert.equal(engine.protocol,1);
+
+  // Re-applying the same package reports it as already current rather than always rewriting.
+  git(shrimp,'add','-A');
+  git(shrimp,'commit','-q','-m','adopt 0.1.0');
+  r=run(shrimp,pkg);
+  assert.equal(step(parse(r),'.shrimp/system/engine.json').action,'unchanged');
 });
 
 test('an update preserves project.json and every substance folder',async()=>{

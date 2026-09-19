@@ -43,13 +43,15 @@ Every operation must state its outcome to the user: observed, proposed, recorded
    Prepares a human-approved local commit of the worktree's existing dirty content (`git add -A && git commit -m "<message>"`). The message argument IS the approval. Never call this without first showing the human the exact exact status of what would be committed and getting their explicit approval of that specific message, immediately before the call. Refuses with no message, skips when nothing is dirty, and refuses if the repository is blocked. It never merges, rebases, resets, force-pushes, or pushes to a remote (only commits locally).
    **Outcome:** committed.
 
-5. **status** (`node <workbench path>/tools/connect/connect.mjs status --workbench .`):
-   A different script entirely that reports on the workbench's own files. Find it by reading the target's `path` from `.linked-repos.json` and joining `tools/connect/connect.mjs` onto it. Never hardcode a directory name, since the user chose it. Touches nothing. Only run this when the user types `/shrimp:oversoul-status` literally.
+5. **status** (`node <target path>/.shrimp/system/connector/bootstrap/connect.mjs status --workbench .`):
+   A different script entirely that reports on the workbench's own files. Find it by reading the target's `path` from `.linked-repos.json` and joining `.shrimp/system/connector/bootstrap/connect.mjs` onto it. Never hardcode a directory name, since the user chose it. `--workbench` is required and names the workbench being reported on, which is why it is `.` when run from the workbench root. Touches nothing. Only run this when the user types `/shrimp:oversoul-status` literally.
    **Outcome:** observed.
 
-6. **update** (`node <workbench path>/tools/connect/connect.mjs update --workbench . --yes`):
-   Fixes whatever the status command reported as not current. If a file was edited by hand, it stops instead of overwriting it. Report that back to the user rather than passing `--force` yourself. Same path-resolution rule as the status command. Only run this when the user types `/shrimp:oversoul-update` literally.
+6. **update** (`node <target path>/.shrimp/system/connector/bootstrap/connect.mjs update --workbench . --yes`):
+   Fixes whatever the status command reported as not current. Without `--yes` it plans without writing. If a file was edited by hand, it stops instead of overwriting it. Report that back to the user rather than passing `--force` yourself. Same path-resolution rule as the status command. Only run this when the user types `/shrimp:oversoul-update` literally.
    **Outcome:** recorded.
+
+   The same script also has `link` (connect a workbench that has no registry entry yet) and `verify` (`status` plus the linked repository's own sync check). Neither has a conversational command, and `link` cannot get one: the skill that would recognize it does not exist until after `link` has already run.
 
 **Commands 5 and 6 run only on literal invocation, never from a paraphrase.** If the user asks to check or update the connector in plain language, do not run status or update yourself. Tell them to type `/shrimp:oversoul-status` or `/shrimp:oversoul-update` directly.
 

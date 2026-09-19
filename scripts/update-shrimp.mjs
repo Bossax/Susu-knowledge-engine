@@ -9,6 +9,10 @@ import {compareRelease} from '../workbench-connector/shared/skill-install.mjs';
 
 const SYSTEM_DIR = '.shrimp/system';
 const CONNECTOR_DEST = '.shrimp/system/connector';
+// Both `bootstrap/connect.mjs` and `oversoul/scripts/install.mjs` read `../../engine.json` relative
+// to their own package directory, which lands here once vendored. Without it they fail with ENOENT
+// against a Shrimp checkout, so the release is copied in beside the connector it describes.
+const ENGINE_RECORD = '.shrimp/system/engine.json';
 const RELEASE_RECORD = '.shrimp/release.json';
 const PROJECT_CONFIG = '.shrimp/project.json';
 
@@ -21,8 +25,9 @@ async function readJson(path) {
 /**
  * Applies a candidate package into a Shrimp working tree so its administrator can review the diff
  * and commit it. The package is verified before anything is extracted, and nothing outside
- * `.shrimp/system/connector` and `.shrimp/release.json` is ever written. This never runs git write
- * commands -- `rev-parse` and `status` are the only two it calls, both read-only.
+ * `.shrimp/system/connector`, `.shrimp/system/engine.json`, and `.shrimp/release.json` is ever
+ * written. This never runs git write commands -- `rev-parse` and `status` are the only two it
+ * calls, both read-only.
  */
 export async function applyRelease({shrimp, packagePath, yes = false, force = [], allowDowngrade = false}) {
   if (!shrimp) throw new Error('--shrimp is required');
@@ -92,6 +97,10 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
     steps.push({step: CONNECTOR_DEST, action: !connectorPresent ? 'missing' : connectorCurrent ? 'unchanged' : 'stale'});
   }
 
+  const enginePath = join(shrimpRoot, ENGINE_RECORD);
+  const currentEngine = await pathExists(enginePath) ? await readJson(enginePath).catch(() => null) : null;
+  steps.push({step: ENGINE_RECORD, action: !currentEngine ? 'missing' : currentEngine.engineRelease === engineRelease && currentEngine.protocol === engine.protocol ? 'unchanged' : 'stale'});
+
   steps.push({step: RELEASE_RECORD, action: !current ? 'missing' : current.bundleHash === bundleHash ? 'unchanged' : 'stale', from: current?.engineRelease, to: engineRelease});
   // Stated in every plan, present or absent, so the preservation guarantee is visible and assertable.
   steps.push({step: PROJECT_CONFIG, action: 'preserved'});
@@ -112,6 +121,8 @@ export async function applyRelease({shrimp, packagePath, yes = false, force = []
   await cp(source, staged, {recursive: true, errorOnExist: true, force: false});
   if (await pathExists(target)) await replaceTree({target, staged});
   else await rename(staged, target);
+
+  await writeJsonAtomic(enginePath, engine);
 
   if (hasLegacyTools) {
     await rm(legacyTools, {recursive: true, force: true});
