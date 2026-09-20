@@ -35,13 +35,13 @@ function protocolManifest(repository) {
     version: 1,
     repository,
     runtime: {nodeMajor: 24, nodeMinMinor: 11},
-    instructions: ['AGENTS.md'],
+    instructions: ['AGENTS.md', 'README.md'],
     capabilities: {
-      list: capability('interactive', 'list', ['AGENTS.md'], 'List tracked Work Threads, Tasks, and sync items'),
-      health: capability('interactive', 'health', ['AGENTS.md'], 'Verify Notion connection, credentials, and repository health'),
-      compare: capability('interactive', 'compare', ['AGENTS.md'], 'Compare local records against Notion before syncing'),
-      publish: capability('actions', 'publish', []),
-      dashboard: capability('actions', 'dashboard', []),
+      list: capability('interactive', 'list', ['README.md'], 'List tracked Work Threads, Tasks, and sync items'),
+      health: capability('interactive', 'health', ['README.md'], 'Verify Notion connection, credentials, and repository health'),
+      compare: capability('interactive', 'compare', ['README.md'], 'Compare local records against Notion before syncing'),
+      publish: capability('actions', 'publish', ['README.md']),
+      dashboard: capability('actions', 'dashboard', ['README.md']),
     },
   };
 }
