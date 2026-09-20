@@ -24,16 +24,22 @@ const NOTION_DEFAULTS = {
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim();
 
 function protocolManifest(repository) {
-  const capability = (context, command, documents) => ({context, argv: [SYNC_ENTRY, command], options: [], documents});
+  const capability = (context, command, documents, description) => ({
+    context,
+    ...(description ? {description} : {}),
+    argv: [SYNC_ENTRY, command],
+    options: [],
+    documents,
+  });
   return {
     version: 1,
     repository,
     runtime: {nodeMajor: 24, nodeMinMinor: 11},
     instructions: ['AGENTS.md'],
     capabilities: {
-      list: capability('interactive', 'list', ['AGENTS.md']),
-      doctor: capability('interactive', 'doctor', ['AGENTS.md']),
-      compare: capability('interactive', 'compare', ['AGENTS.md']),
+      list: capability('interactive', 'list', ['AGENTS.md'], 'List tracked Work Threads, Tasks, and sync items'),
+      health: capability('interactive', 'health', ['AGENTS.md'], 'Verify Notion connection, credentials, and repository health'),
+      compare: capability('interactive', 'compare', ['AGENTS.md'], 'Compare local records against Notion before syncing'),
       publish: capability('actions', 'publish', []),
       dashboard: capability('actions', 'dashboard', []),
     },

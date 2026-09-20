@@ -12,35 +12,41 @@ If registration is missing, explain the required registration; do not guess a re
 
 ## Conversational Invocations
 
-- `/shrimp:oversoul`: Checks repository status. Run `inspect` silently and output the status. Then, read `.shrimp/system/protocol.json` and present the available actions to the user as a Markdown table with one-line descriptions.
-- `/shrimp:oversoul-sync`: Fast-forwards upstream changes when clean and opens access.
-- `/shrimp:oversoul-run <capability>`: Executes a specific action from the repository, using the capability name shown in the discovery table.
-- `/shrimp:oversoul-save <message>`: Prepares a human-approved local commit of existing dirty content.
-- `/shrimp:oversoul-target <NAME>`: Selects a specific registered target when multiple exist.
+- `/shrimp:oversoul`: Checks repository status. Run `inspect` silently. Format the response in two distinct sections:
+  1. **Connection & Health**: Display the target repository, current branch, worktree status (clean/drift), and engine alignment.
+  2. **Action Menu**: A two-column Markdown table titled "Type this" / "What it does". Show the primary commands below, along with every interactive capability from `.shrimp/system/protocol.json` using its authored `description` string verbatim. Never mention technical protocol metadata (`protocol`, `capability`, `context`, `argv`) to the user, and never list non-interactive capabilities (`context: "actions"` or `context: "plumbing"`).
+- `/shrimp:oversoul --sync`: Pulls upstream changes from the shared repository, fast-forwards when clean, and opens gate access. (Alias: `/shrimp:oversoul-sync`).
+- `/shrimp:oversoul --save <message>`: Prepares a human-approved local commit of existing dirty content after reviewing changes. (Alias: `/shrimp:oversoul-save <message>`).
+- `/shrimp:oversoul --health`: Tests Notion connection, credentials, and repository health.
+- `/shrimp:oversoul --list`: Lists tracked Work Threads and Tasks.
+- `/shrimp:oversoul --compare`: Compares local files against Notion before syncing.
+- `/shrimp:oversoul --target <NAME>`: Selects a specific registered target when multiple exist.
 - `/shrimp:oversoul-status`: Reports the workbench's own files' currency. Literal invocation only.
 - `/shrimp:oversoul-update`: Fixes what `/shrimp:oversoul-status` found. Literal invocation only.
+
+If the user asks in natural conversational language to perform an action (such as "sync with Notion", "save my work", "check connection health", or "list open tasks"), map the request directly to the corresponding `/shrimp:oversoul` flag.
 
 ## Commands and Outcomes
 
 Every operation must state its outcome to the user: observed, proposed, recorded, committed, pushed, or published.
 
-1. **check status** (`node <skill>/scripts/linked-repo.mjs inspect [--target NAME]`):
+1. **check status** (`node <skill>/scripts/linked-repo.mjs [--target NAME]` or `node <skill>/scripts/linked-repo.mjs inspect [--target NAME]`):
    Prints a JSON result. Use this to determine if the repository is ready for interaction.
    Do not treat a non-empty `changes` field as dirty. The script already checks for real changes. If `ready` is true, access is open. If `ready` is false, access is closed. Read the output to explain why. Always report the status from the actual command output you just ran.
-   Content drift — dirty, ahead, behind, a divergent branch, detached HEAD, or a failed fetch — is reported separately in a `drift` field and may still be read, reviewed, tested, edited, and prepared for a human-approved local commit. A non-empty `drift` never closes access. Report `drift` to the user as informational context.
+   Content drift (dirty, ahead, behind, a divergent branch, detached HEAD, or a failed fetch) is reported separately in a `drift` field and may still be read, reviewed, tested, edited, and prepared for a human-approved local commit. A non-empty `drift` never closes access. Report `drift` to the user as informational context.
    Whether the installed connector matches the approved release is reported in an `engineAlignment` field.
    **Outcome:** observed.
 
-2. **sync** (`node <skill>/scripts/linked-repo.mjs prepare [--target NAME]`):
+2. **sync** (`node <skill>/scripts/linked-repo.mjs --sync [--target NAME]` or `node <skill>/scripts/linked-repo.mjs prepare [--target NAME]`):
    Fast-forwards a branch that is strictly behind upstream (`git merge --ff-only @{upstream}`), but only when both the repository and drift are clean. A dirty, ahead, or divergent worktree makes it skip the fast-forward rather than attempt one. Opens access on completion. Trust the output from the command, not an assumption about what counts as dirty.
    **Outcome:** observed.
 
-3. **run** (`node <skill>/scripts/linked-repo.mjs run [--target NAME] --capability NAME [-- <arguments>]`):
-   Executes advertised interactive capabilities defined in the target repository's `protocol.json`. The script itself re-checks readiness immediately before running anything and refuses if it is false. Do not pre-judge this yourself. A capability declared with `context: "actions"` is rejected outright.
+3. **run capability** (`node <skill>/scripts/linked-repo.mjs --<capability>` or `node <skill>/scripts/linked-repo.mjs run [--target NAME] --capability NAME [-- <arguments>]`):
+   Executes advertised interactive capabilities defined in the target repository's `protocol.json` (such as `--health`, `--list`, `--compare`). The script itself re-checks readiness immediately before running anything and refuses if it is false. Do not pre-judge this yourself. A capability declared with `context: "actions"` or `context: "plumbing"` is rejected outright.
    **Outcome:** proposed or recorded, depending on the capability.
 
-4. **save** (`node <skill>/scripts/linked-repo.mjs commit [--target NAME] -- "<message>"`):
-   Prepares a human-approved local commit of the worktree's existing dirty content (`git add -A && git commit -m "<message>"`). The message argument IS the approval. Never call this without first showing the human the exact exact status of what would be committed and getting their explicit approval of that specific message, immediately before the call. Refuses with no message, skips when nothing is dirty, and refuses if the repository is blocked. It never merges, rebases, resets, force-pushes, or pushes to a remote (only commits locally).
+4. **save** (`node <skill>/scripts/linked-repo.mjs --save [--target NAME] -- "<message>"` or `node <skill>/scripts/linked-repo.mjs commit [--target NAME] -- "<message>"`):
+   Prepares a human-approved local commit of the worktree's existing dirty content (`git add -A && git commit -m "<message>"`). The message argument IS the approval. Never call this without first showing the human the exact status of what would be committed and getting their explicit approval of that specific message, immediately before the call. Refuses with no message, skips when nothing is dirty, and refuses if the repository is blocked. It never merges, rebases, resets, force-pushes, or pushes to a remote (only commits locally).
    **Outcome:** committed.
 
 5. **status** (`node <target path>/.shrimp/system/connector/bootstrap/connect.mjs status --workbench .`):

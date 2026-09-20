@@ -85,7 +85,10 @@ test('the generated protocol manifest passes the gate-time validator', async () 
 
   const resolved = await manifest(target, 'https://github.com/Bossax/protocol-shrimp.git');
   assert.equal(resolved.version, 1);
-  assert.deepEqual(Object.keys(resolved.capabilities).sort(), ['compare', 'dashboard', 'doctor', 'list', 'publish']);
+  assert.deepEqual(Object.keys(resolved.capabilities).sort(), ['compare', 'dashboard', 'health', 'list', 'publish']);
+  assert.equal(typeof resolved.capabilities.health.description, 'string');
+  assert.equal(typeof resolved.capabilities.list.description, 'string');
+  assert.equal(typeof resolved.capabilities.compare.description, 'string');
   assert.equal(resolved.capabilities.publish.context, 'actions');
   assert.match(resolved.capabilities.list.entrypoint, /sync[\\/]cli\.mjs$/);
 });

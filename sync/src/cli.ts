@@ -65,7 +65,7 @@ try{
       } finally {await unlink(lock);}
     }
   }else{
-    if(!["list","doctor","compare","publish","dashboard"].includes(command)) throw new Error("Unknown command");
+    if(!["list","doctor","health","compare","publish","dashboard"].includes(command)) throw new Error("Unknown command");
     const data=await inventory(root);
     if(command==="list"){output(data);if(data.warnings.length)process.exitCode=2;}
     else{
@@ -76,7 +76,7 @@ try{
       const writing=command==="publish"||command==="dashboard";
       if(writing && (process.env.GITHUB_ACTIONS!=="true" || process.env.GITHUB_REF!=="refs/heads/main" ||
           process.env.GITHUB_REPOSITORY!==config.repository)) throw new Error("Notion writes run only in the configured shared repository's main-branch Actions");
-      if(command==="doctor"){
+      if(command==="doctor" || command==="health"){
         const snapshot=JSON.parse(await readFile(resolve(option("--snapshot","private/notion-snapshot.json")),"utf8"));
         const result=inspectSnapshot(snapshot,config);output(result);if(result.problems.length)process.exitCode=2;
       }else if(command==="publish"){

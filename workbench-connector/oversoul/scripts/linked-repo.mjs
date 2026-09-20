@@ -73,7 +73,8 @@ export async function manifest(root,expected){
   if(!Array.isArray(m.instructions)||!m.instructions.includes('AGENTS.md')||!m.capabilities)throw new Error('Invalid protocol instructions/capabilities');
   const instructions=await Promise.all(m.instructions.map(p=>document(root,p)));
   for(const c of Object.values(m.capabilities)){
-    if(!['interactive','actions'].includes(c.context)||!Array.isArray(c.argv)||!c.argv.length||c.argv.some(a=>typeof a!=='string')||!Array.isArray(c.documents))throw new Error('Invalid capability');
+    if(!['interactive','actions','plumbing'].includes(c.context)||!Array.isArray(c.argv)||!c.argv.length||c.argv.some(a=>typeof a!=='string')||!Array.isArray(c.documents))throw new Error('Invalid capability');
+    if(c.description!==undefined && (typeof c.description!=='string'||!c.description.trim()))throw new Error('Invalid capability description');
     c.resolvedDocuments=await Promise.all(c.documents.map(p=>document(root,p)));
     // Only a Node entrypoint within the verified repository; never a shell command.
     c.entrypoint=await document(root,c.argv[0]);
@@ -234,7 +235,9 @@ export async function operate(workbench,command,target,capability,args=[],fetchR
     await openGate(workbench,after);
     return {...after,status:'committed'};
   }
-  const c=state.protocol.capabilities[capability];
+  let c=state.protocol.capabilities[capability];
+  if(!c && capability==='health' && state.protocol.capabilities['doctor']) c=state.protocol.capabilities['doctor'];
+  if(!c && capability==='doctor' && state.protocol.capabilities['health']) c=state.protocol.capabilities['health'];
   if(!c)throw new Error('Capability unavailable for interactive execution');
   // Deliberate placeholder guard: 'actions'-context capabilities (publish, remote mutation) have no
   // implementation in this client. Nothing calls them today; this rejection is intentional scope,
@@ -254,10 +257,41 @@ const invokedPath=process.argv[1]?await realpath(resolve(process.argv[1])).catch
 if(invokedPath&&import.meta.url===pathToFileURL(invokedPath).href){
   try{
     const [major,minor]=process.versions.node.split('.').map(Number);if(major!==24||minor<11)throw new Error('Use Node 24.11+ within Node 24 LTS');
-    const [command,...args]=process.argv.slice(2);const cut=args.indexOf('--');const flags=cut<0?args:args.slice(0,cut);const rest=cut<0?[]:args.slice(cut+1);
-    if(flags.length%2||flags.some((v,i)=>i%2===0&&!['--target','--capability'].includes(v)))throw new Error('Unknown client arguments');
-    const get=k=>flags.includes(k)?flags[flags.indexOf(k)+1]:undefined;
-    const result=await operate(process.cwd(),command,get('--target'),get('--capability'),rest);
+    const rawArgs=process.argv.slice(2);
+    let command='inspect';
+    let target;
+    let capability;
+    let rest=[];
+
+    let i=0;
+    if(rawArgs.length>0 && !rawArgs[0].startsWith('--')){
+      command=rawArgs[0];
+      i=1;
+    }
+    const remaining=rawArgs.slice(i);
+    const cut=remaining.indexOf('--');
+    const flags=cut<0?remaining:remaining.slice(0,cut);
+    rest=cut<0?[]:remaining.slice(cut+1);
+
+    for(let j=0;j<flags.length;j++){
+      const f=flags[j];
+      if(f==='--target'){target=flags[++j];}
+      else if(f==='--capability'){capability=flags[++j];}
+      else if(f==='--sync'){command='prepare';}
+      else if(f==='--save'){
+        command='commit';
+        if(j+1<flags.length && !flags[j+1].startsWith('--')){
+          rest=[flags[++j]];
+        }
+      }
+      else if(f==='--health'){command='run';capability='health';}
+      else if(f==='--list'){command='run';capability='list';}
+      else if(f==='--compare'){command='run';capability='compare';}
+      else if(f==='--status'){command='inspect';}
+      else throw new Error('Unknown client arguments');
+    }
+
+    const result=await operate(process.cwd(),command,target,capability,rest);
     console.log(JSON.stringify(result,null,2));if(result.status==='blocked'||result.status==='unverified'||(command==='inspect'&&!result.ready))process.exitCode=2;
   }catch(e){console.log(JSON.stringify({status:'unverified',error:e.message}));process.exitCode=1;}
 }
