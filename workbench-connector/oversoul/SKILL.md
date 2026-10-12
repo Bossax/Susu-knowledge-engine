@@ -19,7 +19,7 @@ If registration is missing, explain the required registration; do not guess a re
 - `/shrimp:oversoul --save <message>`: Prepares a human-approved local commit of existing dirty content after reviewing changes. (Alias: `/shrimp:oversoul-save <message>`).
 - `/shrimp:oversoul --health`: Tests Notion connection, credentials, and repository health.
 - `/shrimp:oversoul --list`: Lists tracked Work Threads and Tasks.
-- `/shrimp:oversoul --compare`: Compares local files against Notion before syncing.
+- `/shrimp:oversoul --compare`: Compares local files against Notion before syncing. Requires a fresh `private/notion-snapshot.json` (<15m old). If missing or expired, first capture Notion via Notion MCP (Threads, Tasks, Activity, Dashboard block), normalize it via `normalize-snapshot` (`node <skill>/scripts/linked-repo.mjs run --capability normalize-snapshot -- --input <raw-mcp.json>`), then run compare.
 - `/shrimp:oversoul --target <NAME>`: Selects a specific registered target when multiple exist.
 - `/shrimp:oversoul-status`: Reports the workbench's own files' currency. Literal invocation only.
 - `/shrimp:oversoul-update`: Fixes what `/shrimp:oversoul-status` found. Literal invocation only.
